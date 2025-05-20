@@ -24,7 +24,7 @@ def validate_teacher(args):
                                            cfg_scale=args.cfg_teacher)
 
     if accelerator.is_main_process:
-        image_reward, pick_score, clip_score, fid_score = calculate_scores(
+        image_reward, pick_score, clip_score, hpsv_reward, fid_score = calculate_scores(
             args,
             images,
             prompts,
@@ -35,5 +35,6 @@ def validate_teacher(args):
             f"pick_score": pick_score.item(),
             f"clip_score": clip_score.item(),
             f"image_reward": image_reward.item(),
+            f"hpsv_reward": hpsv_reward.item(),
         }
         print(logs)

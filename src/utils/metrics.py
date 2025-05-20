@@ -4,7 +4,8 @@ import numpy as np
 from src.utils.fid_score_in_memory import calculate_fid
 from accelerate.logging import get_logger
 from transformers import AutoProcessor, AutoModel
-#import ImageReward as RM
+import ImageReward as RM
+import hpsv2
 
 logger = get_logger(__name__)
 
@@ -53,7 +54,7 @@ def calculate_scores(
     processor = AutoProcessor.from_pretrained(args.clip_model_name_or_path)
     clip_model = AutoModel.from_pretrained(args.clip_model_name_or_path).eval().to(device)
     pickscore_model = AutoModel.from_pretrained(args.pickscore_model_name_or_path).eval().to(device)
-    #imagereward_model = RM.load("ImageReward-v1.0").eval().to(device)
+    imagereward_model = RM.load("ImageReward-v1.0").eval().to(device)
 
     image_inputs = processor(
         images=images,
@@ -70,9 +71,15 @@ def calculate_scores(
 
     logger.info("Evaluation ImageReward...")
     image_reward = torch.zeros(1)
-    #for prompt, image in zip(prompts, images):
-    #    image_reward += imagereward_model.score(prompt, [image])
-    #image_reward /= len(prompts)
+    for prompt, image in zip(prompts, images):
+        image_reward += imagereward_model.score(prompt, [image])
+    image_reward /= len(prompts)
+
+    logger.info("Evaluation HPSv2...")
+    hpsv_reward = torch.zeros(1)
+    for prompt, image in zip(prompts, images):
+        hpsv_reward += hpsv2.score([image], prompt, hps_version="v2.1")[0]
+    hpsv_reward /= len(prompts)
 
     logger.info("Evaluating PickScore...")
     pick_score = calc_pick_and_clip_scores(pickscore_model, image_inputs, text_inputs).mean()
@@ -83,7 +90,7 @@ def calculate_scores(
         logger.info("Evaluating FID score...")
         fid_score = calculate_fid(images, ref_stats_path, inception_path=args.inception_path)
 
-    return image_reward, pick_score, clip_score, fid_score
+    return image_reward, pick_score, clip_score, hpsv_reward, fid_score
 # ----------------------------------------------------------------------------------------------------------------------
 
 

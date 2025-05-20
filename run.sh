@@ -6,7 +6,7 @@ MODEL_NAME="stabilityai/stable-diffusion-3.5-large"
 DATASET_PATH="configs/data/mj_sd3.5_cfg4.5_40_steps_preprocessed.yaml"
 
 
-accelerate launch --num_processes=8 --mixed_precision fp16 --main_process_port $PORT main.py \
+accelerate launch --num_processes=8 --multi_gpu --mixed_precision fp16 --main_process_port $PORT main.py \
     --pretrained_model_name_or_path=$MODEL_NAME \
     --train_dataloader_config_path=$DATASET_PATH \
     --current_task="validate_teacher" \
@@ -40,7 +40,8 @@ accelerate launch --num_processes=8 --mixed_precision fp16 --main_process_port $
     --inception_path stats/pt_inception-2015-12-05-6726825d.pth \
     --max_train_steps=1000 \
     --resume_from_checkpoint=latest \
-    --max_eval_samples=100 \
+    --max_eval_samples=96 \
+    --eval_batch_size=8 \
     --pickscore_model_name_or_path yuvalkirstain/PickScore_v1 \
     --clip_model_name_or_path laion/CLIP-ViT-H-14-laion2B-s32B-b79K \
     # --offload_text_encoders \

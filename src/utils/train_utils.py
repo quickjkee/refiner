@@ -220,10 +220,11 @@ def distributed_sampling(
             images = pipeline.vae.decode(latent, return_dict=False)[0]
             images = pipeline.image_processor.postprocess(images, output_type='pil')
         else:
-            images = pipe(
+            images = pipeline_teacher(
                 list(mini_batch),
                 num_inference_steps=28,
                 guidance_scale=cfg_scale,
+                generator=generator
             ).images
 
         for text_idx, global_idx in enumerate(rank_batches_index[cnt]):
@@ -235,20 +236,23 @@ def distributed_sampling(
     for encoder in offloadable_encoders:
         encoder.cpu()
     torch.cuda.empty_cache()
+    accelerator.wait_for_everyone()
 
     local_images = torch.stack(local_images).cuda()
     local_text_idxs = torch.tensor(local_text_idxs).cuda()
+    print(f"[RANK {accelerator.process_index}] local_images.shape = {local_images.shape}")
 
     gathered_images = accelerator.gather(local_images).cpu().numpy()
     gathered_text_idxs = accelerator.gather(local_text_idxs).cpu().numpy()
+    print(f"[RANK {accelerator.process_index}] gathered_images.shape = {gathered_images.shape}")
 
     images, prompts = [], []
     if accelerator.is_main_process:
         for image, global_idx in zip(gathered_images, gathered_text_idxs):
             images.append(ToPILImage()(image))
             prompts.append(all_prompts[global_idx])
-
     accelerator.wait_for_everyone()
+
     return images, prompts
 # ----------------------------------------------------------------------------------------------------------------------
 
