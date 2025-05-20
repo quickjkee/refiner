@@ -1,6 +1,9 @@
 import yaml
 from omegaconf import OmegaConf
-from yt_tools.utils import instantiate_from_config
+try:
+    from yt_tools.utils import instantiate_from_config
+except ModuleNotFoundError:
+    pass
 
 
 def create_dataloader(dataloader_config_path: str, batch_size: int, skip_rows=0):
