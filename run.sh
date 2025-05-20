@@ -1,5 +1,3 @@
-export PYTHONPATH=$PYTHONPATH:"/home/dbaranchuk/dpms/"
-
 ACCELERATE_CONFIG="configs/default_config.yaml"
 PORT=$(( ((RANDOM<<15)|RANDOM) % 27001 + 2000 ))
 echo $PORT
@@ -8,9 +6,10 @@ MODEL_NAME="stabilityai/stable-diffusion-3.5-large"
 DATASET_PATH="configs/data/mj_sd3.5_cfg4.5_40_steps_preprocessed.yaml"
 
 
-CUDA_VISIBLE_DEVICES=2,3 accelerate launch --num_processes=2 --multi_gpu --mixed_precision fp16 --main_process_port $PORT main.py \
+CUDA_VISIBLE_DEVICES=0 accelerate launch --num_processes=1 --mixed_precision fp16 --main_process_port $PORT main.py \
     --pretrained_model_name_or_path=$MODEL_NAME \
     --train_dataloader_config_path=$DATASET_PATH \
+    --current_task="validate_teacher" \
     --text_column="text" \
     --image_column="image" \
     --train_batch_size=2 \
@@ -31,7 +30,7 @@ CUDA_VISIBLE_DEVICES=2,3 accelerate launch --num_processes=2 --multi_gpu --mixed
     --rank=64 \
     --cls_blocks=11 \
     --pdm_blocks=22 \
-    --cfg_teacher=4.5 \
+    --cfg_teacher=3.5 \
     --cfg_fake=4.5 \
     --apply_lora_to_attn_projections \
     --apply_lora_to_mlp_projections \
