@@ -40,8 +40,8 @@ accelerate launch --num_processes=8 --multi_gpu --mixed_precision fp16 --main_pr
     --inception_path stats/pt_inception-2015-12-05-6726825d.pth \
     --max_train_steps=1000 \
     --resume_from_checkpoint=latest \
-    --max_eval_samples=96 \
-    --eval_batch_size=8 \
+    --max_eval_samples=5000 \
+    --eval_batch_size=4 \
     --pickscore_model_name_or_path yuvalkirstain/PickScore_v1 \
     --clip_model_name_or_path laion/CLIP-ViT-H-14-laion2B-s32B-b79K \
     # --offload_text_encoders \
