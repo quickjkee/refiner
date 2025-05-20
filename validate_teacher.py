@@ -1,12 +1,10 @@
 import torch
 from accelerate.logging import get_logger
 from pathlib import Path
+from diffusers import StableDiffusion3Pipeline
 
 from src.utils.train_utils import distributed_sampling
 from distill_sd3_scalewise import prepare_models, prepare_accelertor, prepare_prompt_embed_from_caption
-from src.utils.flow_matching_sampler import FlowMatchingSolver
-from src.pipelines.stable_diffusion_3 import ScaleWiseStableDiffusion3Pipeline
-from src.utils.train_utils import unwrap_model
 from src.utils.metrics import calculate_scores
 
 logger = get_logger(__name__)
@@ -18,9 +16,9 @@ def validate_teacher(args):
     accelerator = prepare_accelertor(args, logging_dir)
 
     pipeline_teacher = StableDiffusion3Pipeline.from_pretrained(args.pretrained_model_name_or_path,
-                                                                torch_dtype=torch.bfloat16)
-    images, prompts = distributed_sampling(pipeline, args, f'prompts/mjhq.csv',
-                                           prepare_prompt_embed_from_caption, fm_solver, noise_scheduler,
+                                                                torch_dtype=torch.bfloat16).to('cuda')
+    images, prompts = distributed_sampling(None, args, f'prompts/mjhq.csv',
+                                           prepare_prompt_embed_from_caption, None, None,
                                            accelerator, logger, 0,
                                            pipeline_teacher=pipeline_teacher,
                                            cfg_scale=args.cfg_teacher)

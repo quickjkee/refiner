@@ -6,7 +6,7 @@ MODEL_NAME="stabilityai/stable-diffusion-3.5-large"
 DATASET_PATH="configs/data/mj_sd3.5_cfg4.5_40_steps_preprocessed.yaml"
 
 
-CUDA_VISIBLE_DEVICES=0 accelerate launch --num_processes=1 --mixed_precision fp16 --main_process_port $PORT main.py \
+accelerate launch --num_processes=8 --mixed_precision fp16 --main_process_port $PORT main.py \
     --pretrained_model_name_or_path=$MODEL_NAME \
     --train_dataloader_config_path=$DATASET_PATH \
     --current_task="validate_teacher" \
