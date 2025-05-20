@@ -159,12 +159,11 @@ def distributed_sampling(
     logger,
     offloadable_encoders=None,
     cfg_scale=0.0,
+    pipeline_teacher=None,
 ):
     logger.info(f"Running sampling")
 
-    weight_dtype = pipeline.text_encoder.dtype
-    assert weight_dtype == torch.float16
-    
+    weight_dtype = torch.float16
     offloadable_encoders = offloadable_encoders or []
     
     generator = torch.Generator(device=accelerator.device).manual_seed(args.seed) if args.seed else None
@@ -181,43 +180,51 @@ def distributed_sampling(
         encoder.to(accelerator.device)
     torch.cuda.empty_cache()
                 
-    for cnt, mini_batch in enumerate(tqdm(rank_batches, disable=(not accelerator.is_main_process))):        
-        prompt_embeds, pooled_prompt_embeds = prepare_prompt_embed_from_caption(
-            list(mini_batch), pipeline.tokenizer, pipeline.tokenizer_2, pipeline.tokenizer_3,
-            pipeline.text_encoder, pipeline.text_encoder_2, pipeline.text_encoder_3
-        )
+    for cnt, mini_batch in enumerate(tqdm(rank_batches, disable=(not accelerator.is_main_process))):
 
-        if cfg_scale > 1.0:
-            uncond_prompt_embeds, uncond_pooled_prompt_embeds = prepare_prompt_embed_from_caption(
-                [' '] * len(prompt_embeds),
-                pipeline.tokenizer, pipeline.tokenizer_2, pipeline.tokenizer_3,
+        if pipeline_teacher is None:
+            prompt_embeds, pooled_prompt_embeds = prepare_prompt_embed_from_caption(
+                list(mini_batch), pipeline.tokenizer, pipeline.tokenizer_2, pipeline.tokenizer_3,
                 pipeline.text_encoder, pipeline.text_encoder_2, pipeline.text_encoder_3
             )
+
+            if cfg_scale > 1.0:
+                uncond_prompt_embeds, uncond_pooled_prompt_embeds = prepare_prompt_embed_from_caption(
+                    [' '] * len(prompt_embeds),
+                    pipeline.tokenizer, pipeline.tokenizer_2, pipeline.tokenizer_3,
+                    pipeline.text_encoder, pipeline.text_encoder_2, pipeline.text_encoder_3
+                )
+            else:
+                uncond_prompt_embeds, uncond_pooled_prompt_embeds = None, None
+
+            sigmas = noise_scheduler.sigmas[solver.boundary_idx]
+            timesteps = noise_scheduler.timesteps[solver.boundary_start_idx]
+            idx_start = torch.tensor([0] * len(prompt_embeds))
+            idx_end = torch.tensor([len(solver.boundary_idx) - 1] * len(prompt_embeds))
+
+            sampling_fn = solver.flow_matching_sampling_stochastic if args.stochastic_case else solver.flow_matching_sampling
+            latent = torch.randn(
+                (len(prompt_embeds), 16, 128, 128),
+                generator=generator, device=accelerator.device
+            )
+            images = sampling_fn(
+                pipeline.transformer, latent,
+                prompt_embeds, pooled_prompt_embeds,
+                uncond_prompt_embeds, uncond_pooled_prompt_embeds,
+                idx_start, idx_end,
+                cfg_scale=cfg_scale, do_scales=True if args.scales else False,
+                sigmas=sigmas, timesteps=timesteps, generator=generator
+            ).to(weight_dtype)
+
+            latent = (images / pipeline.vae.config.scaling_factor) + pipeline.vae.config.shift_factor
+            images = pipeline.vae.decode(latent, return_dict=False)[0]
+            images = pipeline.image_processor.postprocess(images, output_type='pil')
         else:
-            uncond_prompt_embeds, uncond_pooled_prompt_embeds = None, None
-                
-        sigmas = noise_scheduler.sigmas[solver.boundary_idx]
-        timesteps = noise_scheduler.timesteps[solver.boundary_start_idx]
-        idx_start = torch.tensor([0] * len(prompt_embeds))
-        idx_end = torch.tensor([len(solver.boundary_idx) - 1] * len(prompt_embeds))
-
-        sampling_fn = solver.flow_matching_sampling_stochastic if args.stochastic_case else solver.flow_matching_sampling
-        latent = torch.randn(
-            (len(prompt_embeds), 16, 128, 128),
-            generator=generator, device=accelerator.device
-        )
-        images = sampling_fn(
-            pipeline.transformer, latent,
-            prompt_embeds, pooled_prompt_embeds,
-            uncond_prompt_embeds, uncond_pooled_prompt_embeds,
-            idx_start, idx_end,
-            cfg_scale=cfg_scale, do_scales=True if args.scales else False,
-            sigmas=sigmas, timesteps=timesteps, generator=generator
-        ).to(weight_dtype)
-
-        latent = (images / pipeline.vae.config.scaling_factor) + pipeline.vae.config.shift_factor
-        images = pipeline.vae.decode(latent, return_dict=False)[0]
-        images = pipeline.image_processor.postprocess(images, output_type='pil')
+            images = pipe(
+                list(mini_batch),
+                num_inference_steps=28,
+                guidance_scale=cfg_scale,
+            ).images
 
         for text_idx, global_idx in enumerate(rank_batches_index[cnt]):
             img_tensor = torch.tensor(np.array(images[text_idx].resize((512, 512))))
