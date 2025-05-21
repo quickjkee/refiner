@@ -17,6 +17,8 @@ def validate_teacher(args):
 
     pipeline_teacher = StableDiffusion3Pipeline.from_pretrained(args.pretrained_model_name_or_path,
                                                                 torch_dtype=torch.bfloat16).to('cuda')
+    pipeline_teacher.set_progress_bar_config(disable=True)
+
     images, prompts = distributed_sampling(None, args, f'prompts/mjhq.csv',
                                            prepare_prompt_embed_from_caption, None, None,
                                            accelerator, logger, 0,

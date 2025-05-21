@@ -77,9 +77,9 @@ def calculate_scores(
 
     logger.info("Evaluation HPSv2...")
     hpsv_reward = torch.zeros(1)
-    for prompt, image in zip(prompts, images):
-        hpsv_reward += hpsv2.score([image], prompt, hps_version="v2.1")[0]
-    hpsv_reward /= len(prompts)
+    #for prompt, image in zip(prompts, images):
+    #    hpsv_reward += hpsv2.score([image], prompt, hps_version="v2.1")[0]
+    #hpsv_reward /= len(prompts)
 
     logger.info("Evaluating PickScore...")
     pick_score = calc_pick_and_clip_scores(pickscore_model, image_inputs, text_inputs).mean()

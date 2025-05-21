@@ -5,9 +5,9 @@ import numpy as np
 import random
 import pandas as pd
 import torch.distributed as dist
+import tqdm
 
 from contextlib import nullcontext
-from tqdm import tqdm
 from diffusers.utils import is_wandb_available
 from diffusers.utils.torch_utils import is_compiled_module
 from transformers import (
@@ -180,7 +180,7 @@ def distributed_sampling(
         encoder.to(accelerator.device)
     torch.cuda.empty_cache()
                 
-    for cnt, mini_batch in enumerate(tqdm(rank_batches, disable=(not accelerator.is_main_process))):
+    for cnt, mini_batch in enumerate(tqdm.tqdm(rank_batches, disable=(not accelerator.is_main_process))):
 
         if pipeline_teacher is None:
             prompt_embeds, pooled_prompt_embeds = prepare_prompt_embed_from_caption(
@@ -221,10 +221,10 @@ def distributed_sampling(
             images = pipeline.image_processor.postprocess(images, output_type='pil')
         else:
             images = pipeline_teacher(
-                list(mini_batch),
-                num_inference_steps=28,
-                guidance_scale=cfg_scale,
-                generator=generator
+                    list(mini_batch),
+                    num_inference_steps=28,
+                    guidance_scale=cfg_scale,
+                    generator=generator,
             ).images
 
         for text_idx, global_idx in enumerate(rank_batches_index[cnt]):
