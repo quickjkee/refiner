@@ -55,7 +55,7 @@ from src.utils.train_utils import log_validation, tokenize_captions, \
 from src.utils.flow_matching_sampler import FlowMatchingSolver
 from src.pipelines.stable_diffusion_3 import ScaleWiseStableDiffusion3Pipeline
 from src.models.transformer_with_gan import forward_with_classify, TransformerCls
-from src.utils.distillation_losses import dmd_loss, fake_diffusion_loss, diffusion_loss
+from src.utils.distillation_losses import dmd_loss, fake_diffusion_loss, pdm_loss
 from src.utils.metrics import calculate_scores
 
 logger = get_logger(__name__)
@@ -194,7 +194,7 @@ def train(args):
         avg_dmd_loss = dmd_loss(
             transformer, transformer_fake, transformer_teacher,
             prompt_embeds, pooled_prompt_embeds,
-            model_input, timesteps, target,
+            model_input, timesteps,
             optimizer, lr_scheduler, params_to_optimize,
             weight_dtype, noise_scheduler,
             accelerator, args)
@@ -203,27 +203,13 @@ def train(args):
         ### PDM loss
         ### ----------------------------------------------------
         if args.do_pdm_loss:
-            if not args.do_sample_once:
-                model_input, model_input_prev, batch, \
-                prompt_embeds, pooled_prompt_embeds, \
-                idx_start, scales = sample_batch(args, accelerator,
-                                                 batch, fm_solver,
-                                                 tokenizer, tokenizer_2, tokenizer_3,
-                                                 text_encoder, text_encoder_2, text_encoder_3,
-                                                 vae, weight_dtype, idx_start)
-                timesteps_start = noise_scheduler.timesteps[idx_start].to(device=model_input.device)
-                noise = torch.randn_like(model_input)
-                noisy_model_input = noise_scheduler.scale_noise(model_input, timesteps_start, noise)
-
-            avg_dm_loss = diffusion_loss(
-                transformer,
-                transformer_fake if not args.do_dics_for_scale else transformer_fakes[int(scales[0])],
+            avg_pdm_loss = pdm_loss(
+                transformer, transformer_fake,
                 prompt_embeds, pooled_prompt_embeds,
-                noisy_model_input, model_input,
-                timesteps_start, idx_start,
+                model_input, timesteps, target,
                 optimizer, lr_scheduler, params_to_optimize,
-                weight_dtype, noise_scheduler, fm_solver,
-                accelerator, args, global_step, model_input_down=model_input_prev
+                weight_dtype, noise_scheduler,
+                accelerator, args
             )
         ### ----------------------------------------------------
 
@@ -233,57 +219,65 @@ def train(args):
         ### Model evaluation
         ### ----------------------------------------------------
         if global_step % args.evaluation_steps == 0:
-            image_processor = VaeImageProcessor(vae_scale_factor=vae.config.scaling_factor)
-            pipeline = Pipeline(
-                vae=vae,
-                transformer=unwrap_model(transformer, accelerator),
-                text_encoder=unwrap_model(text_encoder, accelerator),
-                text_encoder_2=unwrap_model(text_encoder_2, accelerator),
-                text_encoder_3=unwrap_model(text_encoder_3, accelerator),
-                tokenizer=tokenizer, tokenizer_2=tokenizer_2, tokenizer_3=tokenizer_3,
-                revision=args.revision,
-                variant=args.variant,
-                torch_dtype=weight_dtype,
-                image_processor=image_processor
-            )
-
-            for eval_set_name in ['mjhq', 'coco']:
+            for eval_set_name in ['mjhq']:
                 eval_prompts_path = f'prompts/{eval_set_name}.csv'
                 if eval_set_name == "coco":
                     fid_stats_path = args.coco_ref_stats_path
                 else:
                     fid_stats_path = args.mjhq_ref_stats_path
 
+                pipeline_teacher = StableDiffusion3Pipeline.from_pretrained("stabilityai/stable-diffusion-3.5-large",
+                                                                            transformer=unwrap_model(transformer_teacher,
+                                                                                                     accelerator),
+                                                                            vae=vae,
+                                                                            text_encoder=unwrap_model(text_encoder,
+                                                                                                      accelerator),
+                                                                            text_encoder_2=unwrap_model(text_encoder_2,
+                                                                                                        accelerator),
+                                                                            text_encoder_3=unwrap_model(text_encoder_3,
+                                                                                                        accelerator),
+                                                                            tokenizer=tokenizer,
+                                                                            tokenizer_2=tokenizer_2,
+                                                                            tokenizer_3=tokenizer_3,
+                                                                            revision=args.revision,
+                                                                            variant=args.variant,
+                                                                            torch_dtype=torch.bfloat16)
                 images, prompts = distributed_sampling(
-                    pipeline,
+                    unwrap_model(transformer, accelerator),
                     args,
                     eval_prompts_path,
                     prepare_prompt_embed_from_caption,
-                    fm_solver,
                     noise_scheduler,
                     accelerator,
                     logger,
-                    offloadable_encoders=offloadable_encoders
+                    seed=args.seed,
+                    max_eval_samples=args.max_eval_samples,
+                    offloadable_encoders=None,
+                    cfg_scale=args.cfg_teacher,
+                    pipeline_teacher=pipeline_teacher,
                 )
                 if accelerator.is_main_process:
                     torch.cuda.empty_cache()
-                    image_reward, pick_score, clip_score, fid_score = calculate_scores(
+                    image_reward, pick_score, clip_score, hpsv_reward, fid_score, div_score = calculate_scores(
                         args,
                         images,
                         prompts,
                         ref_stats_path=fid_stats_path,
                     )
                     logs = {
-                        f"fid_{eval_set_name}": fid_score.item(),
-                        f"pick_score_{eval_set_name}": pick_score.item(),
-                        f"clip_score_{eval_set_name}": clip_score.item(),
-                        f"image_reward_{eval_set_name}": image_reward.item(),
+                        f"fid": fid_score.item(),
+                        f"pick_score": pick_score.item(),
+                        f"clip_score": clip_score.item(),
+                        f"image_reward": image_reward.item(),
+                        f"hpsv_reward": hpsv_reward.item(),
+                        f'diversity_score': div_score.item(),
                     }
                     print(eval_set_name, logs)
                     accelerator.log(logs, step=global_step)
                     copy_logs_to_logs_path(logging_dir)
 
                 torch.cuda.empty_cache()
+                del pipeline_teacher
                 accelerator.wait_for_everyone()
         ### ----------------------------------------------------
 
@@ -297,30 +291,37 @@ def train(args):
         ### ----------------------------------------------------
         if accelerator.is_main_process:
             if global_step % args.validation_steps == 0:
-                image_processor = VaeImageProcessor(vae_scale_factor=vae.config.scaling_factor)
-                pipeline = Pipeline(
-                    vae=vae,
-                    transformer=unwrap_model(transformer, accelerator),
-                    text_encoder=unwrap_model(text_encoder, accelerator),
-                    text_encoder_2=unwrap_model(text_encoder_2, accelerator),
-                    text_encoder_3=unwrap_model(text_encoder_3, accelerator),
-                    tokenizer=tokenizer, tokenizer_2=tokenizer_2, tokenizer_3=tokenizer_3,
-                    revision=args.revision,
-                    variant=args.variant,
-                    torch_dtype=weight_dtype,
-                    image_processor=image_processor
-                )
+                pipeline_teacher = StableDiffusion3Pipeline.from_pretrained("stabilityai/stable-diffusion-3.5-large",
+                                                                            transformer=unwrap_model(transformer_teacher,
+                                                                                                     accelerator),
+                                                                            vae=vae,
+                                                                            text_encoder=unwrap_model(text_encoder,
+                                                                                                      accelerator),
+                                                                            text_encoder_2=unwrap_model(text_encoder_2,
+                                                                                                        accelerator),
+                                                                            text_encoder_3=unwrap_model(text_encoder_3,
+                                                                                                        accelerator),
+                                                                            tokenizer=tokenizer,
+                                                                            tokenizer_2=tokenizer_2,
+                                                                            tokenizer_3=tokenizer_3,
+                                                                            revision=args.revision,
+                                                                            variant=args.variant,
+                                                                            torch_dtype=torch.bfloat16)
 
                 log_validation(
-                    pipeline, args,
-                    prepare_prompt_embed_from_caption, fm_solver, noise_scheduler,
-                    accelerator, logger, global_step,
-                    offloadable_encoders=offloadable_encoders
+                    unwrap_model(transformer, accelerator),
+                    args,
+                    prepare_prompt_embed_from_caption,
+                    noise_scheduler,
+                    accelerator,
+                    logger,
+                    seed=args.seed,
+                    offloadable_encoders=None,
+                    cfg_scale=args.cfg_teacher,
+                    pipeline_teacher=pipeline_teacher,
                 )
-                copy_out_to_snapshot(args.output_dir)
-                copy_logs_to_logs_path(logging_dir)
 
-                del pipeline
+                del pipeline_teacher
                 torch.cuda.empty_cache()
 
         accelerator.wait_for_everyone()
@@ -329,7 +330,7 @@ def train(args):
         logs = {
             "fake_loss": avg_dmd_fake_loss.detach().item(),
             "dmd_loss": avg_dmd_loss.detach().item(),
-            "dm_loss": avg_dm_loss.detach().item() if args.do_dm_loss else 0,
+            "dm_loss": avg_pdm_loss.detach().item() if args.do_pdm_loss else 0,
             "lr": lr_scheduler.get_last_lr()[0]}
         progress_bar.set_postfix(**logs)
         accelerator.log(logs, step=global_step)

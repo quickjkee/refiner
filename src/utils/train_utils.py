@@ -53,16 +53,16 @@ VALIDATION_PROMPTS = [
 # ----------------------------------------------------------------------------------------------------------------------
 @torch.no_grad()
 def log_validation(
-    pipeline,
+    transformer,
     args,
     prepare_prompt_embed_from_caption,
-    solver,
     noise_scheduler,
     accelerator,
     logger,
-    step,
-    num_images_per_prompt=4,
+    seed=None,
     offloadable_encoders=None,
+    cfg_scale=0.0,
+    pipeline_teacher=None,
 ):
     offloadable_encoders = offloadable_encoders or []
     
@@ -70,7 +70,8 @@ def log_validation(
     validation_prompts = VALIDATION_PROMPTS
         
     # run inference
-    generator = torch.Generator(device=accelerator.device).manual_seed(args.seed) if args.seed else None
+    seed = seed if seed else args.seed
+    generator = torch.Generator(device=accelerator.device).manual_seed(seed)
     weight_dtype = pipeline.text_encoder.dtype
     assert weight_dtype == torch.float16
     
@@ -79,41 +80,53 @@ def log_validation(
         encoder.to(accelerator.device)
         
     image_logs = []
-    for _, prompt in enumerate(validation_prompts):    
-        # Sample batch in a loop to save memory
-        prompt_embeds, pooled_prompt_embeds = prepare_prompt_embed_from_caption(
-            [prompt], pipeline.tokenizer, pipeline.tokenizer_2, pipeline.tokenizer_3,
-            pipeline.text_encoder, pipeline.text_encoder_2, pipeline.text_encoder_3,
-        )
-        
-        sigmas = noise_scheduler.sigmas[solver.boundary_idx]
-        timesteps = noise_scheduler.timesteps[solver.boundary_start_idx]
-        idx_start = torch.tensor([0] * len(prompt_embeds))
-        idx_end = torch.tensor([len(solver.boundary_idx) - 1] * len(prompt_embeds))
-        sampling_fn = solver.flow_matching_sampling_stochastic if args.stochastic_case else solver.flow_matching_sampling
-        
-        images = []
-        for _ in range(num_images_per_prompt):
-            latent = torch.randn(
-                (1, 16, 128, 128), 
-                generator=generator, 
-                device=accelerator.device
+    images_teacher = None
+    for _, prompt in enumerate(validation_prompts):
+
+        # Teacher + refining
+        if transformer is not None:
+            with pipeline_teacher.transformer.disable_adapter():
+                latents_teacher = pipeline_teacher(
+                    [prompt],
+                    num_inference_steps=28,
+                    guidance_scale=cfg_scale,
+                    generator=generator,
+                    output_type="latent"
+                ).images
+
+            prompt_embeds, pooled_prompt_embeds = prepare_prompt_embed_from_caption(
+                [prompt], pipeline_teacher.tokenizer, pipeline_teacher.tokenizer_2, pipeline_teacher.tokenizer_3,
+                pipeline_teacher.text_encoder, pipeline_teacher.text_encoder_2, pipeline_teacher.text_encoder_3,
             )
-            image = sampling_fn(
-                pipeline.transformer, latent,
-                prompt_embeds, pooled_prompt_embeds,
-                None, None,
-                idx_start, idx_end,
-                cfg_scale=0.0, do_scales=True if args.scales else False,
-                sigmas=sigmas, timesteps=timesteps, generator=generator
-            ).to(weight_dtype)
-            
-            latent = (image / pipeline.vae.config.scaling_factor) + pipeline.vae.config.shift_factor
-            image = pipeline.vae.decode(latent, return_dict=False)[0]
-            image = pipeline.image_processor.postprocess(image, output_type='pil')[0]
-            images.append(image)
+            timesteps = noise_scheduler.timesteps[args.refining_timestep_index].to(device=latents_teacher.device)
+            images = transformer(
+                latents_teacher,
+                prompt_embeds,
+                pooled_prompt_embeds,
+                timesteps,
+                return_dict=False,
+            )[0].to(weight_dtype)
+
+            latent = (images / pipeline_teacher.vae.config.scaling_factor) + pipeline_teacher.vae.config.shift_factor
+            images = pipeline_teacher.vae.decode(latent, return_dict=False)[0]
+            images = pipeline_teacher.image_processor.postprocess(images, output_type='pil')
+
+            latents_teacher = (latents_teacher / pipeline_teacher.vae.config.scaling_factor) + pipeline_teacher.vae.config.shift_factor
+            images_teacher = pipeline_teacher.vae.decode(latents_teacher, return_dict=False)[0]
+            images_teacher = pipeline_teacher.image_processor.postprocess(images_teacher, output_type='pil')
+
+        # Teacher only
+        else:
+            images = pipeline_teacher(
+                [prompt],
+                num_inference_steps=28,
+                guidance_scale=cfg_scale,
+                generator=generator,
+            ).images
 
         image_logs.append({"validation_prompt": prompt, "images": images})
+        if images_teacher is not None:
+            image_logs.append({"validation_prompt": f'teacher_{prompt}', "images": images_teacher})
         
     # Offload text encoders back
     for encoder in offloadable_encoders:
@@ -142,11 +155,10 @@ def log_validation(
 # ----------------------------------------------------------------------------------------------------------------------
 @torch.no_grad()
 def distributed_sampling(
-    pipeline,
+    transformer,
     args,
     val_prompt_path,
     prepare_prompt_embed_from_caption,
-    solver,
     noise_scheduler,
     accelerator,
     logger,
@@ -179,43 +191,35 @@ def distributed_sampling(
                 
     for cnt, mini_batch in enumerate(tqdm.tqdm(rank_batches, disable=(not accelerator.is_main_process))):
 
-        if pipeline_teacher is None:
+        # Teacher + refining
+        if transformer is not None:
+            with pipeline_teacher.transformer.disable_adapter():
+                latents_teacher = pipeline_teacher(
+                    list(mini_batch),
+                    num_inference_steps=28,
+                    guidance_scale=cfg_scale,
+                    generator=generator,
+                    output_type="latent"
+                ).images
+
             prompt_embeds, pooled_prompt_embeds = prepare_prompt_embed_from_caption(
-                list(mini_batch), pipeline.tokenizer, pipeline.tokenizer_2, pipeline.tokenizer_3,
-                pipeline.text_encoder, pipeline.text_encoder_2, pipeline.text_encoder_3
+                list(mini_batch), pipeline_teacher.tokenizer, pipeline_teacher.tokenizer_2, pipeline_teacher.tokenizer_3,
+                pipeline_teacher.text_encoder, pipeline_teacher.text_encoder_2, pipeline_teacher.text_encoder_3,
             )
+            timesteps = noise_scheduler.timesteps[args.refining_timestep_index].to(device=latents_teacher.device)
+            images = transformer(
+                latents_teacher,
+                prompt_embeds,
+                pooled_prompt_embeds,
+                timesteps,
+                return_dict=False,
+            )[0].to(weight_dtype)
 
-            if cfg_scale > 1.0:
-                uncond_prompt_embeds, uncond_pooled_prompt_embeds = prepare_prompt_embed_from_caption(
-                    [' '] * len(prompt_embeds),
-                    pipeline.tokenizer, pipeline.tokenizer_2, pipeline.tokenizer_3,
-                    pipeline.text_encoder, pipeline.text_encoder_2, pipeline.text_encoder_3
-                )
-            else:
-                uncond_prompt_embeds, uncond_pooled_prompt_embeds = None, None
+            latent = (images / pipeline_teacher.vae.config.scaling_factor) + pipeline_teacher.vae.config.shift_factor
+            images = pipeline_teacher.vae.decode(latent, return_dict=False)[0]
+            images = pipeline_teacher.image_processor.postprocess(images, output_type='pil')
 
-            sigmas = noise_scheduler.sigmas[solver.boundary_idx]
-            timesteps = noise_scheduler.timesteps[solver.boundary_start_idx]
-            idx_start = torch.tensor([0] * len(prompt_embeds))
-            idx_end = torch.tensor([len(solver.boundary_idx) - 1] * len(prompt_embeds))
-
-            sampling_fn = solver.flow_matching_sampling_stochastic if args.stochastic_case else solver.flow_matching_sampling
-            latent = torch.randn(
-                (len(prompt_embeds), 16, 128, 128),
-                generator=generator, device=accelerator.device
-            )
-            images = sampling_fn(
-                pipeline.transformer, latent,
-                prompt_embeds, pooled_prompt_embeds,
-                uncond_prompt_embeds, uncond_pooled_prompt_embeds,
-                idx_start, idx_end,
-                cfg_scale=cfg_scale, do_scales=True if args.scales else False,
-                sigmas=sigmas, timesteps=timesteps, generator=generator
-            ).to(weight_dtype)
-
-            latent = (images / pipeline.vae.config.scaling_factor) + pipeline.vae.config.shift_factor
-            images = pipeline.vae.decode(latent, return_dict=False)[0]
-            images = pipeline.image_processor.postprocess(images, output_type='pil')
+        # Teacher only
         else:
             images = pipeline_teacher(
                     list(mini_batch),

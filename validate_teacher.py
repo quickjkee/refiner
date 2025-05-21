@@ -19,9 +19,11 @@ def validate_teacher(args):
                                                                 torch_dtype=torch.bfloat16).to('cuda')
     pipeline_teacher.set_progress_bar_config(disable=True)
 
+    ## Metrics
+    ## -----------------------------------------------------------------------------------------------------------------
     images, prompts = distributed_sampling(pipeline=None, args=args, val_prompt_path=f'prompts/mjhq.csv',
-                                           prepare_prompt_embed_from_caption=prepare_prompt_embed_from_caption, 
-                                           solver=None, noise_scheduler=None,
+                                           prepare_prompt_embed_from_caption=prepare_prompt_embed_from_caption,
+                                           noise_scheduler=None,
                                            accelerator=accelerator, logger=logger,
                                            seed=args.seed,
                                            max_eval_samples=args.max_eval_samples,
@@ -30,16 +32,15 @@ def validate_teacher(args):
     additional_images = []
     if args.calc_diversity:
         for seed in [0, 1, 2, 3]:
-                images, _ = distributed_sampling(pipeline=None, args=args, val_prompt_path=f'prompts/mjhq.csv',
-                                           prepare_prompt_embed_from_caption=prepare_prompt_embed_from_caption, 
-                                           solver=None, noise_scheduler=None,
-                                           accelerator=accelerator, logger=logger,
-                                           seed=seed,
-                                           max_eval_samples=args.max_eval_samples,
-                                           pipeline_teacher=pipeline_teacher,
-                                           cfg_scale=args.cfg_teacher)
-                additional_images.append(images)
-
+            images, _ = distributed_sampling(pipeline=None, args=args, val_prompt_path=f'prompts/mjhq.csv',
+                                             prepare_prompt_embed_from_caption=prepare_prompt_embed_from_caption,
+                                             noise_scheduler=None,
+                                             accelerator=accelerator, logger=logger,
+                                             seed=seed,
+                                             max_eval_samples=args.max_eval_samples,
+                                             pipeline_teacher=pipeline_teacher,
+                                             cfg_scale=args.cfg_teacher)
+            additional_images.append(images)
 
     if accelerator.is_main_process:
         image_reward, pick_score, clip_score, hpsv_reward, fid_score, div_score = calculate_scores(
@@ -58,3 +59,20 @@ def validate_teacher(args):
             f'diversity_score': div_score.item(),
         }
         print(logs)
+    ## -----------------------------------------------------------------------------------------------------------------
+
+    ## Logs validation
+    ## -----------------------------------------------------------------------------------------------------------------
+    log_validation(
+        None,
+        args,
+        prepare_prompt_embed_from_caption,
+        None,
+        accelerator,
+        logger,
+        seed=args.seed,
+        offloadable_encoders=None,
+        cfg_scale=args.cfg_teacher,
+        pipeline_teacher=pipeline_teacher,
+    )
+    ## -----------------------------------------------------------------------------------------------------------------

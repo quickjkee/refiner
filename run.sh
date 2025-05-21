@@ -19,7 +19,7 @@ accelerate launch --num_processes=8 --multi_gpu --mixed_precision fp16 --main_pr
     --learning_rate=2e-6 \
     --lr_scheduler="constant_with_warmup" \
     --lr_warmup_steps=300 \
-    --do_gan_loss \
+    --do_pdm_loss \
     --num_discriminator_upds=3 \
     --num_discriminator_layers=4 \
     --cls_blocks=11 \

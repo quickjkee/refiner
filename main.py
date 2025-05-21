@@ -367,15 +367,7 @@ def parse_args(input_args=None):
         default=1e-2,
     )
     parser.add_argument(
-        "--do_gan_loss",
-        action="store_true",
-    )
-    parser.add_argument(
         "--do_pdm_loss",
-        action="store_true",
-    )
-    parser.add_argument(
-        "--do_dmd",
         action="store_true",
     )
     parser.add_argument(
