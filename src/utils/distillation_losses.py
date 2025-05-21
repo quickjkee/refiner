@@ -62,50 +62,26 @@ def gan_loss_fn(cls_head, inner_features_fake, inner_features_true=None):
 def dmd_loss(
         transformer, transformer_fake, transformer_teacher,
         prompt_embeds, pooled_prompt_embeds,
-        uncond_prompt_embeds, uncond_pooled_prompt_embeds,
-        noisy_model_input, model_input,
-        timesteps_start, idx_start,
+        model_input, timesteps, target,
         optimizer, lr_scheduler, params_to_optimize,
-        weight_dtype, noise_scheduler, fm_solver,
-        accelerator, args, step, model_input_down=None
+        weight_dtype, noise_scheduler,
+        accelerator, args
 ):
-    ## STEP 1. Make the prediction with the student to create fake samples
+    ## STEP 1. Make a prediction with the student to create fake samples
     ## ---------------------------------------------------------------------------
     optimizer.zero_grad(set_to_none=True)
     transformer.train()
     transformer_fake.eval()
 
-    scales = fm_solver.scales[torch.argmax((idx_start[:, None] == fm_solver.boundary_start_idx).int(), dim=1)]
-
-    ### To avoid train inference missmatch we have to generate model_input_down via student
-    ### key: we have to obtain the image with the same resolution as model_input_down
-    if args.do_avoid_train_infer_missmatch:
-        idx_next = torch.argmax((scales[:, None] == fm_solver.scales).int(), dim=1)
-        model_input_down = sample_from_student(
-                                                transformer, fm_solver, noise_scheduler, idx_next[0].item(),
-                                                prompt_embeds, None,
-                                                None, pooled_prompt_embeds,
-                                                accelerator, args)
-
-    with accelerator.autocast():
-        if model_input_down is None:
-            model_input_prev = fm_solver.downscale_to_previous_and_upscale(model_input, scales, transformer)
-        else:
-            model_input_prev = fm_solver.upscale_to_next(model_input_down, scales, transformer)
-
-    noise = torch.randn_like(model_input_prev)
-    noisy_model_input_curr = noise_scheduler.scale_noise(model_input_prev, timesteps_start, noise)
-
     model_pred = transformer(
-        noisy_model_input_curr,
+        model_input,
         prompt_embeds,
         pooled_prompt_embeds,
-        timesteps_start,
+        timesteps,
         return_dict=False,
     )[0]
-
-    sigma_start = noise_scheduler.sigmas[idx_start].to(device=model_pred.device)[:, None, None, None]
-    fake_sample = noisy_model_input_curr - sigma_start * model_pred
+    sigma_start = noise_scheduler.sigmas[args.refining_timestep_index].to(device=model_pred.device)[:, None, None, None]
+    fake_sample = model_input - sigma_start * model_pred
 
     ## Apply noise to the boundary points for the fake,
     idx_noisy = torch.randint(idx_start[0].item(), len(noise_scheduler.timesteps), (len(fake_sample),))
@@ -214,11 +190,10 @@ def dmd_loss(
 def fake_diffusion_loss(
         transformer, transformer_fake,
         prompt_embeds, pooled_prompt_embeds,
-        noisy_model_input, model_input,
-        timesteps_start, idx_start,
+        model_input, timesteps, target,
         optimizer, lr_scheduler, params_to_optimize,
-        weight_dtype, noise_scheduler, fm_solver,
-        accelerator, args, step, model_input_down=None
+        weight_dtype, noise_scheduler,
+        accelerator, args
 ):
     ## STEP 1. Make the prediction with the student to create fake samples
     ## ---------------------------------------------------------------------------
@@ -226,40 +201,18 @@ def fake_diffusion_loss(
     transformer_fake.train()
     transformer.eval()
 
-    scales = fm_solver.scales[torch.argmax((idx_start[:, None] == fm_solver.boundary_start_idx).int(), dim=1)]
-
-    ### To avoid train inference missmatch we have to generate model_input_down via student
-    ### key: we have to obtain the image with the same resolution as model_input_down
-    if args.do_avoid_train_infer_missmatch:
-        idx_next = torch.argmax((scales[:, None] == fm_solver.scales).int(), dim=1)
-        model_input_down = sample_from_student(
-                                                transformer, fm_solver, noise_scheduler, idx_next[0].item(),
-                                                prompt_embeds, None,
-                                                None, pooled_prompt_embeds,
-                                                accelerator, args)
-
-    with accelerator.autocast():
-        if model_input_down is None:
-            model_input_prev = fm_solver.downscale_to_previous_and_upscale(model_input, scales, transformer)
-        else:
-            model_input_prev = fm_solver.upscale_to_next(model_input_down, scales, transformer)
-
-    noise = torch.randn_like(model_input_prev)
-    noisy_model_input_curr = noise_scheduler.scale_noise(model_input_prev, timesteps_start, noise)
-
     with torch.no_grad(), torch.autocast("cuda", dtype=weight_dtype):
         model_pred = transformer(
-            noisy_model_input_curr,
+            model_input,
             prompt_embeds,
             pooled_prompt_embeds,
-            timesteps_start,
+            timesteps,
             return_dict=False,
         )[0]
+    sigma_start = noise_scheduler.sigmas[args.refining_timestep_index].to(device=model_pred.device)[:, None, None, None]
+    fake_sample = model_input - sigma_start * model_pred
 
-    sigma_start = noise_scheduler.sigmas[idx_start].to(device=model_pred.device)[:, None, None, None]
-    fake_sample = noisy_model_input_curr - sigma_start * model_pred
-
-    ## Apply noise to the boundary points for the fake,
+    ## Apply noise to the boundary points for the fake sample
     idx_noisy = torch.randint(0, len(noise_scheduler.timesteps), (len(fake_sample),))
     timesteps_noisy = noise_scheduler.timesteps[idx_noisy].to(device=model_input.device)
     sigma_noisy = noise_scheduler.sigmas[idx_noisy].to(device=model_pred.device)[:, None, None, None]
@@ -283,7 +236,7 @@ def fake_diffusion_loss(
 
     ## STEP 3. Calculate real features and gan loss
     ## ---------------------------------------------------------------------------
-    noisy_true_sample = noise_scheduler.scale_noise(model_input, timesteps_noisy, noise)
+    noisy_true_sample = noise_scheduler.scale_noise(target, timesteps_noisy, noise)
     inner_features_true = transformer_fake(noisy_true_sample,
                                            prompt_embeds,
                                            pooled_prompt_embeds,
@@ -332,8 +285,10 @@ def mmd_loss(x, y, sigma=200):
     k_yy = torch.exp(- alpha * (ry.permute(0, 2, 1) + ry - 2*yy)).mean()
 
     return 100 * (k_xx + k_yy - 2 * k_xy)
+# ----------------------------------------------------------------------------------------------------------------------
 
 
+# ----------------------------------------------------------------------------------------------------------------------
 def diffusion_loss(
     transformer, transformer_fake,
     prompt_embeds, pooled_prompt_embeds,

@@ -67,14 +67,7 @@ def log_validation(
     offloadable_encoders = offloadable_encoders or []
     
     # Set validation prompts
-    if args.validation_prompt is not None:
-        logger.info(
-            f"Running validation... \n Generating {args.num_validation_images} images with prompt:"
-            f" {args.validation_prompt}."
-        )
-        validation_prompts = [args.validation_prompt]
-    else:
-        validation_prompts = VALIDATION_PROMPTS
+    validation_prompts = VALIDATION_PROMPTS
         
     # run inference
     generator = torch.Generator(device=accelerator.device).manual_seed(args.seed) if args.seed else None

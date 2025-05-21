@@ -8,6 +8,9 @@ from validate_teacher import validate_teacher
 # ----------------------------------------------------------------------------------------------------------------------
 def parse_args(input_args=None):
     parser = argparse.ArgumentParser(description="Simple example of a training script.")
+
+    ## Datasets/models/stats args
+    ## -----------------------------------------------------------------------------------------------
     parser.add_argument(
         "--pretrained_model_name_or_path",
         type=str,
@@ -35,52 +38,6 @@ def parse_args(input_args=None):
         help="Variant of the model files of the pretrained model identifier from huggingface.co/models, 'e.g.' fp16",
     )
     parser.add_argument(
-        "--sizes",
-        type=int,
-        nargs="+",
-        required=False,
-        help="List of sizes (after VAE decoder) on different sampling steps.",
-    )
-    parser.add_argument(
-        "--size_switch_steps",
-        type=int,
-        nargs="+",
-        required=False,
-        help="List of size_switch_steps (after VAE decoder) when size is changed.",
-    )
-    parser.add_argument(
-        "--size_interpolation",
-        type=str,
-        default="nearest",
-        choices=["nearest", "bilinear", "bicubic", "fft"],
-        help="Interpolation mode for size switch.",
-    )
-    parser.add_argument(
-        "--size_distribution",
-        type=str,
-        default="uniform",
-        choices=["uniform", "logit_normal"],
-        help="Size sampling distribution.",
-    )
-    parser.add_argument(
-        "--size_distribution_loc",
-        type=float,
-        default=0.0,
-        help="Loc of size distribution (for logit_normal).",
-    )
-    parser.add_argument(
-        "--size_distribution_scale",
-        type=float,
-        default=1.0,
-        help="Scale of size distribution (for logit_normal).",
-    )
-    parser.add_argument(
-        "--train_dataloader_config_path",
-        type=str,
-        default=None,
-        help="Path to train_dataloader yaml config.",
-    )
-    parser.add_argument(
         "--clip_model_name_or_path",
         type=str,
         default=None,
@@ -106,27 +63,27 @@ def parse_args(input_args=None):
         default="stats/pt_inception-2015-12-05-6726825d.pth",
     )
     parser.add_argument(
-        "--scale_lora_adapters_path",
+        "--train_dataloader_config_path",
         type=str,
         default=None,
-    )
-    parser.add_argument(
-        "--path_to_upscalers",
-        type=str,
-        default=None,
+        help="Path to train_dataloader yaml config.",
     )
     parser.add_argument(
         "--train_data_dir",
         type=str,
         default=None,
-        help=(
-            "A folder containing the training data. Folder contents must follow the structure described in"
-            " https://huggingface.co/docs/datasets/image_dataset#imagefolder. In particular, a `metadata.jsonl` file"
-            " must exist to provide the captions for the images. Ignored if `dataset_name` is specified."
-        ),
     )
     parser.add_argument(
         "--image_column", type=str, default="image", help="The column of the dataset containing an image."
+    )
+    parser.add_argument(
+        "--resolution",
+        type=int,
+        default=1024,
+        help=(
+            "The resolution for input images, all the images in the train/validation dataset will be resized to this"
+            " resolution"
+        ),
     )
     parser.add_argument(
         "--text_column",
@@ -164,17 +121,44 @@ def parse_args(input_args=None):
         default=None,
         help="The column of the dataset with precomputed pooled embedding for text_encoder_2 (CLIP-G)."
     )
+    ## -----------------------------------------------------------------------------------------------
+
+
+    ## Running settings
+    ## -----------------------------------------------------------------------------------------------
     parser.add_argument(
-        "--validation_prompt",
+        "--current_task",
         type=str,
-        default=None,
-        help="A prompt that is used during validation to verify that the model is learning.",
+        default='distill_sd3_scalewise',
     )
     parser.add_argument(
-        "--num_validation_images",
+        "--output_dir",
+        type=str,
+        default="sd-model-finetuned-lora",
+        help="The output directory where the model predictions and checkpoints will be written.",
+    )
+    parser.add_argument(
+        "--logging_dir",
+        type=str,
+        default="logs",
+        help=(
+            "[TensorBoard](https://www.tensorflow.org/tensorboard) log directory. Will default to"
+            " *output_dir/runs/**CURRENT_DATETIME_HOSTNAME***."
+        ),
+    )
+    parser.add_argument(
+        "--report_to",
+        type=str,
+        default="tensorboard",
+        help=(
+            'The integration to report the results and logs to. Supported platforms are `"tensorboard"`'
+            ' (default), `"wandb"` and `"comet_ml"`. Use `"all"` to report to all integrations.'
+        ),
+    )
+    parser.add_argument(
+        "--evaluation_steps",
         type=int,
-        default=4,
-        help="Number of images that should be generated during validation with `validation_prompt`.",
+        default=300,
     )
     parser.add_argument(
         "--validation_steps",
@@ -184,68 +168,6 @@ def parse_args(input_args=None):
             "Run fine-tuning validation every X steps. The validation process consists of running the prompt"
             " `args.validation_prompt` multiple times: `args.num_validation_images`."
         ),
-    )
-    parser.add_argument(
-        "--max_train_samples",
-        type=int,
-        default=None,
-        help=(
-            "For debugging purposes or quicker training, truncate the number of training examples to this "
-            "value if set."
-        ),
-    )
-    parser.add_argument(
-        "--max_eval_samples",
-        type=int,
-        default=5000,
-        help="Number of samples for metric calculation",
-    )
-    parser.add_argument(
-        "--output_dir",
-        type=str,
-        default="sd-model-finetuned-lora",
-        help="The output directory where the model predictions and checkpoints will be written.",
-    )
-    parser.add_argument(
-        "--cache_dir",
-        type=str,
-        default=None,
-        help="The directory where the downloaded models and datasets will be stored.",
-    )
-    parser.add_argument("--seed", type=int, default=0, help="A seed for reproducible training.")
-    parser.add_argument(
-        "--resolution",
-        type=int,
-        default=1024,
-        help=(
-            "The resolution for input images, all the images in the train/validation dataset will be resized to this"
-            " resolution"
-        ),
-    )
-    parser.add_argument(
-        "--center_crop",
-        default=False,
-        action="store_true",
-        help=(
-            "Whether to center crop the input images to the resolution. If not set, the images will be randomly"
-            " cropped. The images will be resized to the resolution first before cropping."
-        ),
-    )
-    parser.add_argument(
-        "--random_flip",
-        action="store_true",
-        help="whether to randomly flip images horizontally",
-    )
-    parser.add_argument(
-        "--train_text_encoder",
-        action="store_true",
-        help="Whether to train the text encoder. If set, the text encoder should be float32 precision.",
-    )
-    parser.add_argument(
-        "--train_batch_size", type=int, default=16, help="Batch size (per device) for the training dataloader."
-    )
-    parser.add_argument(
-        "--eval_batch_size", type=int, default=2, help="Batch size (per device) for the evaluation."
     )
     parser.add_argument(
         "--max_train_steps",
@@ -264,10 +186,10 @@ def parse_args(input_args=None):
         ),
     )
     parser.add_argument(
-        "--checkpoints_total_limit",
+        "--max_eval_samples",
         type=int,
-        default=None,
-        help=("Max number of checkpoints to store."),
+        default=5000,
+        help="Number of samples for metric calculation",
     )
     parser.add_argument(
         "--resume_from_checkpoint",
@@ -277,6 +199,29 @@ def parse_args(input_args=None):
             "Whether training should be resumed from a previous checkpoint. Use a path saved by"
             ' `--checkpointing_steps`, or `"latest"` to automatically select the last available checkpoint.'
         ),
+    )
+    parser.add_argument(
+        "--offload_text_encoders",
+        action="store_true",
+        help="Whether to offload text encoders on training.",
+    )
+    parser.add_argument(
+        "--previous_best_ps",
+        type=float,
+        default=0.218,
+    )
+    ## -----------------------------------------------------------------------------------------------
+
+
+    ## Training hyperparameters
+    ## -----------------------------------------------------------------------------------------------
+    parser.add_argument("--seed", type=int, default=0, help="A seed for reproducible training.")
+    parser.add_argument("--refining_timestep_index", type=int, default=26)
+    parser.add_argument(
+        "--train_batch_size", type=int, default=16, help="Batch size (per device) for the training dataloader."
+    )
+    parser.add_argument(
+        "--eval_batch_size", type=int, default=4, help="Batch size (per device) for the evaluation."
     )
     parser.add_argument(
         "--gradient_accumulation_steps",
@@ -302,12 +247,6 @@ def parse_args(input_args=None):
         help="Initial learning rate (after the potential warmup period) to use.",
     )
     parser.add_argument(
-        "--scale_lr",
-        action="store_true",
-        default=False,
-        help="Scale the learning rate by the number of GPUs, gradient accumulation steps, and batch size.",
-    )
-    parser.add_argument(
         "--lr_scheduler",
         type=str,
         default="constant",
@@ -329,26 +268,11 @@ def parse_args(input_args=None):
         "--lr_warmup_steps", type=int, default=500, help="Number of steps for the warmup in the lr scheduler."
     )
     parser.add_argument(
-        "--snr_gamma",
-        type=float,
-        default=None,
-        help="SNR weighting gamma to be used if rebalancing the loss. Recommended value is 5.0. "
-        "More details here: https://arxiv.org/abs/2303.09556.",
-    )
-    parser.add_argument(
         "--allow_tf32",
         action="store_true",
         help=(
             "Whether or not to allow TF32 on Ampere GPUs. Can be used to speed up training. For more information, see"
             " https://pytorch.org/docs/stable/notes/cuda.html#tensorfloat-32-tf32-on-ampere-devices"
-        ),
-    )
-    parser.add_argument(
-        "--dataloader_num_workers",
-        type=int,
-        default=0,
-        help=(
-            "Number of subprocesses to use for data loading. 0 means that the data will be loaded in the main process."
         ),
     )
     parser.add_argument(
@@ -359,24 +283,6 @@ def parse_args(input_args=None):
     parser.add_argument("--adam_weight_decay", type=float, default=1e-2, help="Weight decay to use.")
     parser.add_argument("--adam_epsilon", type=float, default=1e-08, help="Epsilon value for the Adam optimizer")
     parser.add_argument("--max_grad_norm", default=10.0, type=float, help="Max gradient norm.")
-    parser.add_argument(
-        "--logging_dir",
-        type=str,
-        default="logs",
-        help=(
-            "[TensorBoard](https://www.tensorflow.org/tensorboard) log directory. Will default to"
-            " *output_dir/runs/**CURRENT_DATETIME_HOSTNAME***."
-        ),
-    )
-    parser.add_argument(
-        "--report_to",
-        type=str,
-        default="tensorboard",
-        help=(
-            'The integration to report the results and logs to. Supported platforms are `"tensorboard"`'
-            ' (default), `"wandb"` and `"comet_ml"`. Use `"all"` to report to all integrations.'
-        ),
-    )
     parser.add_argument(
         "--mixed_precision",
         type=str,
@@ -389,13 +295,6 @@ def parse_args(input_args=None):
         ),
     )
     parser.add_argument("--local_rank", type=int, default=-1, help="For distributed training: local_rank")
-    parser.add_argument(
-        "--enable_xformers_memory_efficient_attention", action="store_true", help="Whether or not to use xformers."
-    )
-    parser.add_argument(
-        "--enable_npu_flash_attention", action="store_true", help="Whether or not to use npu flash attention."
-    )
-    parser.add_argument("--noise_offset", type=float, default=0, help="The scale of noise offset.")
     parser.add_argument(
         "--rank",
         type=int,
@@ -428,21 +327,6 @@ def parse_args(input_args=None):
         help=("Whether to apply LoRA to timesteps projections."),
     )
     parser.add_argument(
-        "--offload_text_encoders",
-        action="store_true",
-        help="Whether to offload text encoders on training.",
-    ) 
-    parser.add_argument(
-        "--debug_loss",
-        action="store_true",
-        help="debug loss for each image, if filenames are available in the dataset",
-    )
-    parser.add_argument(
-        "--num_boundaries",
-        type=int,
-        default=5,
-    )
-    parser.add_argument(
         "--num_discriminator_upds",
         type=int,
         default=3,
@@ -459,19 +343,14 @@ def parse_args(input_args=None):
         help="The huber loss parameter. Only used if `--loss_type=huber`.",
     )
     parser.add_argument(
-        "--previous_best_ps",
-        type=float,
-        default=0.218,
-    )
-    parser.add_argument(
         "--cfg_teacher",
         type=float,
-        default=4.5,
+        default=3.5,
     )
     parser.add_argument(
         "--cfg_fake",
         type=float,
-        default=4.5,
+        default=3.5,
     )
     parser.add_argument(
         "--gen_cls_loss_weight",
@@ -484,66 +363,16 @@ def parse_args(input_args=None):
         default=1e-2,
     )
     parser.add_argument(
-        "--do_sample_once",
-        action="store_true",
-    )
-    parser.add_argument(
-        "--do_bug",
-        action="store_true",
-    )
-    parser.add_argument(
-        "--do_ode_loss",
-        action="store_true",
-    )
-    parser.add_argument(
-        "--do_train_on_synthetic",
-        action="store_true",
-    )
-    parser.add_argument(
-        "--do_avoid_train_infer_missmatch",
-        action="store_true",
-    )
-    parser.add_argument(
-        "--do_dics_for_scale",
-        action="store_true",
-    )
-    parser.add_argument(
-        "--do_cnn_upscale",
-        action="store_true",
-    )
-    parser.add_argument(
-        "--do_pixels_downscale",
-        action="store_true",
-    )
-    parser.add_argument(
         "--do_gan_loss",
         action="store_true",
     )
     parser.add_argument(
-        "--do_dm_loss",
-        action="store_true",
-    )
-    parser.add_argument(
-        "--do_mmd_loss_for_dm_loss",
+        "--do_pdm_loss",
         action="store_true",
     )
     parser.add_argument(
         "--do_dmd",
         action="store_true",
-    )
-    parser.add_argument(
-        "--stochastic_case",
-        action="store_true",
-    )
-    parser.add_argument(
-        "--scales",
-        type=str,
-        default=None,
-    )
-    parser.add_argument(
-        "--boundaries",
-        type=str,
-        default=None,
     )
     parser.add_argument(
         "--cls_blocks",
@@ -556,31 +385,16 @@ def parse_args(input_args=None):
         default=None,
     )
     parser.add_argument(
-        "--current_task",
-        type=str,
-        default='distill_sd3_scalewise',
-    )
-    parser.add_argument(
-        "--evaluation_steps",
-        type=int,
-        default=300,
-    )
-    parser.add_argument(
         "--n_steps_fake_dmd",
         type=int,
         default=5,
     )
+    ## -----------------------------------------------------------------------------------------------
     
     if input_args is not None:
         args = parser.parse_args(input_args)
     else:
         args = parser.parse_args()
-
-    if args.scales:
-        args.scales = [int(x) for x in args.scales.split(",")]
-
-    if args.boundaries:
-        args.boundaries = [int(x) for x in args.boundaries.split(",")]
 
     if args.cls_blocks:
         args.cls_blocks = [int(x) for x in args.cls_blocks.split(",")]

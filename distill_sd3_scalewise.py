@@ -72,6 +72,7 @@ DATASET_NAME_MAPPING = {
 
 # ----------------------------------------------------------------------------------------------------------------------
 def train(args):
+
     ## PREPARATION STAGE
     ## -----------------------------------------------------------------------------------------------
     ## Prepare accelerator
@@ -95,7 +96,7 @@ def train(args):
     text_encoder, text_encoder_2, text_encoder_3, \
     tokenizer, tokenizer_2, tokenizer_3, noise_scheduler, weight_dtype = prepare_models(args, accelerator)
 
-    # Define offloadable encoders
+    ## Define offloadable encoders
     offloadable_encoders = []
     if args.offload_text_encoders:
         if args.text_embedding_column and args.pooled_text_embedding_column:
@@ -105,66 +106,25 @@ def train(args):
         if args.text_embedding_3_column:
             offloadable_encoders.append(text_encoder_3)
 
-    ## Add CNN upscaling and make it DDP
-    transformer = TransformerUp(args, transformer)
-    transformer = accelerator.prepare(transformer)
-
-    ## Prepare scale-adapted LoRA adapters
-    scale_lora_adapters = {}
-    if args.scale_lora_adapters_path:
-        for resolution in os.listdir(args.scale_lora_adapters_path):
-            adapter_path = os.path.join(
-                args.scale_lora_adapters_path,
-                resolution,
-                "pytorch_lora_weights.safetensors"
-            )
-            if os.path.exists(adapter_path):
-                with safe_open(adapter_path, framework="pt") as f:
-                    name = int(int(resolution) / 8)
-                    scale_lora_adapters[name] = {k: f.get_tensor(k) for k in f.keys()}
-                    transformer_teacher.load_lora_adapter(scale_lora_adapters[int(int(resolution) / 8)],
-                                                          adapter_name=f"{name}")
-
-    logger.info(f'Existed teacher LoRAs {args.scale_lora_adapters_path}')
-
     ## Set up schedulers: diffusion and distilled models
     noise_scheduler.set_timesteps(28)  ## HARDCODED AS A COMMON VALUE
     fm_solver = FlowMatchingSolver(noise_scheduler, args.num_boundaries, args.scales, args.boundaries)
 
     ## Add GAN head and make it DDP
     transformer_fake.forward = types.MethodType(forward_with_classify, transformer_fake)
-    if args.do_dics_for_scale:
-        transformer_fakes = {
-            scale: accelerator_fake.prepare(
-                TransformerCls(args, transformer_fake)
-            )
-            for scale in set(args.scales)
-        }
-    else:
-        transformer_fake = TransformerCls(args, transformer_fake)
-        transformer_fake = accelerator_fake.prepare(transformer_fake)
+    transformer_fake = TransformerCls(args, transformer_fake)
+    transformer_fake = accelerator_fake.prepare(transformer_fake)
 
     ## Prepare optimizers
     optimizer, lr_scheduler, params_to_optimize = prepare_optimizer(args, transformer, is_student=True)
     optimizer, lr_scheduler = accelerator.prepare(optimizer, lr_scheduler)
-    if args.do_dics_for_scale:
-        optimizers_fake, lr_schedulers_fake, params_to_optimize_fake_ = {}, {}, {}
-        for scale in set(args.scales):
-            optimizer_fake, lr_scheduler_fake, params_to_optimize_fake = prepare_optimizer(args,
-                                                                                           transformer_fakes[scale],
-                                                                                           is_student=False)
-            optimizer_fake, lr_scheduler_fake = accelerator_fake.prepare(optimizer_fake, lr_scheduler_fake)
-            optimizers_fake[scale] = optimizer_fake
-            lr_schedulers_fake[scale] = lr_scheduler_fake
-            params_to_optimize_fake_[scale] = params_to_optimize_fake
-    else:
-        optimizer_fake, lr_scheduler_fake, params_to_optimize_fake = prepare_optimizer(args,
-                                                                                       transformer_fake,
-                                                                                       is_student=False)
-        optimizer_fake, lr_scheduler_fake = accelerator_fake.prepare(optimizer_fake, lr_scheduler_fake)
+    optimizer_fake, lr_scheduler_fake, params_to_optimize_fake = prepare_optimizer(args,
+                                                                                   transformer_fake,
+                                                                                   is_student=False)
+    optimizer_fake, lr_scheduler_fake = accelerator_fake.prepare(optimizer_fake, lr_scheduler_fake)
 
     ## Prepare data
-    train_dataloader = create_dataloader(args.train_dataloader_config_path, args.train_batch_size)
+    train_dataloader = create_dataloader(args)
     train_dataset = train_dataloader.dataset
 
     ## Load if exist
@@ -198,68 +158,52 @@ def train(args):
         text_encoder, text_encoder_2, text_encoder_3
     )
 
-    # Offload text encoders before training
+    ## Offload text encoders before training
     for encoder in offloadable_encoders:
         encoder.cpu()
 
     assert transformer.training
     for batch in train_dataloader:
 
-        idx_start = random.choices(fm_solver.boundary_start_idx, k=1)[0]
-        idx_start = torch.tensor([idx_start] * args.train_batch_size).long()
-        if args.do_sample_once:
-            model_input, model_input_prev, batch, \
-            prompt_embeds, pooled_prompt_embeds, \
-            idx_start, scales = sample_batch(args, accelerator,
-                                             batch, fm_solver,
-                                             tokenizer, tokenizer_2, tokenizer_3,
-                                             text_encoder, text_encoder_2, text_encoder_3,
-                                             vae, weight_dtype, idx_start)
-            timesteps_start = noise_scheduler.timesteps[idx_start].to(device=model_input.device)
-            noise = torch.randn_like(model_input)
-            noisy_model_input = noise_scheduler.scale_noise(model_input, timesteps_start, noise)
-
         ### DMD loss
         ### ----------------------------------------------------
         for _ in range(args.n_steps_fake_dmd):
-            if not args.do_sample_once:
-                model_input, model_input_prev, batch, \
-                prompt_embeds, pooled_prompt_embeds, \
-                idx_start, scales = sample_batch(args, accelerator,
-                                                 batch, fm_solver,
-                                                 tokenizer, tokenizer_2, tokenizer_3,
-                                                 text_encoder, text_encoder_2, text_encoder_3,
-                                                 vae, weight_dtype, idx_start)
-                timesteps_start = noise_scheduler.timesteps[idx_start].to(device=model_input.device)
-                noise = torch.randn_like(model_input)
-                noisy_model_input = noise_scheduler.scale_noise(model_input, timesteps_start, noise)
+            (target, batch,
+             prompt_embeds, pooled_prompt_embeds) = sample_batch(args,
+                                                                 accelerator,
+                                                                 batch,
+                                                                 tokenizer, tokenizer_2, tokenizer_3,
+                                                                 text_encoder, text_encoder_2, text_encoder_3,
+                                                                 vae, weight_dtype)
+            noise = torch.randn_like(target)
+            model_input = fm_solver.flow_matching_sampling(transformer_teacher, noise,
+                                                           prompt_embeds, pooled_prompt_embeds,
+                                                           uncond_prompt_embeds, uncond_pooled_prompt_embeds,
+                                                           cfg_scale=args.cfg_teacher)
+            timesteps = noise_scheduler.timesteps[args.refining_timestep].to(device=target.device)
+
 
             avg_dmd_fake_loss = fake_diffusion_loss(
-                transformer, transformer_fake if not args.do_dics_for_scale else transformer_fakes[int(scales[0])],
+                transformer, transformer_fake,
                 prompt_embeds, pooled_prompt_embeds,
-                noisy_model_input, model_input,
-                timesteps_start, idx_start,
-                optimizer_fake if not args.do_dics_for_scale else optimizers_fake[int(scales[0])],
-                lr_scheduler_fake if not args.do_dics_for_scale else lr_schedulers_fake[int(scales[0])],
-                params_to_optimize_fake if not args.do_dics_for_scale else params_to_optimize_fake_[int(scales[0])],
-                weight_dtype, noise_scheduler, fm_solver,
-                accelerator_fake, args, global_step, model_input_down=model_input_prev)
+                model_input, timesteps, target,
+                optimizer, lr_scheduler, params_to_optimize,
+                weight_dtype, noise_scheduler,
+                accelerator, args
+            )
 
         avg_dmd_loss = dmd_loss(
-            transformer, transformer_fake if not args.do_dics_for_scale else transformer_fakes[int(scales[0])],
-            transformer_teacher,
+            transformer, transformer_fake, transformer_teacher,
             prompt_embeds, pooled_prompt_embeds,
-            uncond_prompt_embeds, uncond_pooled_prompt_embeds,
-            noisy_model_input, model_input,
-            timesteps_start, idx_start,
+            model_input, timesteps, target,
             optimizer, lr_scheduler, params_to_optimize,
-            weight_dtype, noise_scheduler, fm_solver,
-            accelerator, args, global_step, model_input_down=model_input_prev)
+            weight_dtype, noise_scheduler,
+            accelerator, args)
         ### ----------------------------------------------------
 
-        ### DM loss
+        ### PDM loss
         ### ----------------------------------------------------
-        if args.do_dm_loss:
+        if args.do_pdm_loss:
             if not args.do_sample_once:
                 model_input, model_input_prev, batch, \
                 prompt_embeds, pooled_prompt_embeds, \
@@ -397,8 +341,6 @@ def train(args):
 
     accelerator.wait_for_everyone()
     accelerator.end_training()
-
-
 # ----------------------------------------------------------------------------------------------------------------------
 
 
@@ -408,42 +350,16 @@ def train(args):
 
 
 # ----------------------------------------------------------------------------------------------------------------------
-def sample_batch(args, accelerator,
-                 batch, fm_solver,
+def sample_batch(args,
+                 accelerator,
+                 batch,
                  tokenizer, tokenizer_2, tokenizer_3,
                  text_encoder, text_encoder_2, text_encoder_3,
-                 vae, weight_dtype, idx_start):
+                 vae, weight_dtype):
 
-    pixel_values_ = batch[args.image_column].to(device=accelerator.device)
-    scales = fm_solver.scales[torch.argmax((idx_start[:, None] == fm_solver.boundary_start_idx).int(),
-                                           dim=1)]
-    current_scale = scales[0].item()
-
-    if args.do_pixels_downscale:
-        if current_scale == fm_solver.min_scale:
-            previous_scales = scales
-        else:
-            previous_scales = fm_solver._get_previous_scale(scales)
-        pixel_values = fm_solver.downscale_to_current(pixel_values_, scales * 8)
-        if args.do_bug:
-            _ = pixel_values
-        else:
-            _ = pixel_values_
-        pixel_values_prev = fm_solver.downscale_to_current(_, previous_scales * 8)
-        model_input_prev = vae.encode(pixel_values_prev.to(weight_dtype)).latent_dist.sample()
-        model_input_prev = (model_input_prev - vae.config.shift_factor) * vae.config.scaling_factor
-        assert model_input_prev.dtype == weight_dtype
-    else:
-        model_input_prev = None
-
-    # Memory efficient VAE encoding
-    model_inputs = []
-    for pixel_value in pixel_values:
-        model_input = vae.encode(pixel_value[None].to(weight_dtype)).latent_dist.sample()
-        model_input = (model_input - vae.config.shift_factor) * vae.config.scaling_factor
-        model_inputs.append(model_input)
-    model_input = torch.cat(model_inputs, dim=0)
-    assert model_input.dtype == weight_dtype
+    pixel_values = batch[args.image_column].to(device=accelerator.device)
+    model_input = vae.encode(pixel_values.to(weight_dtype)).latent_dist.sample()
+    model_input = (model_input - vae.config.shift_factor) * vae.config.scaling_factor
 
     batch.update(tokenize_captions(batch, args, tokenizer, tokenizer_2, tokenizer_3, is_train=True))
     prompt_embeds, pooled_prompt_embeds = encode_prompt(
@@ -460,7 +376,7 @@ def sample_batch(args, accelerator,
         pooled_prompt_embeds_2=batch.get(args.pooled_text_embedding_2_column)
     )
 
-    return model_input, model_input_prev, batch, prompt_embeds, pooled_prompt_embeds, idx_start, scales
+    return model_input, batch, prompt_embeds, pooled_prompt_embeds
 # ----------------------------------------------------------------------------------------------------------------------
 
 
@@ -508,8 +424,6 @@ def prepare_accelertor(args, logging_dir, find_unused_parameters=False):
             os.makedirs(args.output_dir, exist_ok=True)
 
     return accelerator
-
-
 # ----------------------------------------------------------------------------------------------------------------------
 
 
@@ -660,11 +574,6 @@ def prepare_models(args, accelerator):
     if args.allow_tf32:
         torch.backends.cuda.matmul.allow_tf32 = True
 
-    if args.scale_lr:
-        args.learning_rate = (
-                args.learning_rate * args.gradient_accumulation_steps * args.train_batch_size * accelerator.num_processes
-        )
-
     # Make sure the trainable params are in float32.
     if weight_dtype == torch.float16:
         models = [transformer]
@@ -676,8 +585,6 @@ def prepare_models(args, accelerator):
            text_encoder, text_encoder_2, text_encoder_3, \
            tokenizer, tokenizer_2, tokenizer_3, \
            noise_scheduler, weight_dtype
-
-
 # ----------------------------------------------------------------------------------------------------------------------
 
 
@@ -699,8 +606,6 @@ def prepare_prompt_embed_from_caption(
         input_ids_3=uncond_tokens["input_ids_3"],
     )
     return uncond_prompt_embeds, uncond_pooled_prompt_embeds
-
-
 # ----------------------------------------------------------------------------------------------------------------------
 
 
@@ -732,8 +637,6 @@ def prepare_optimizer(args, transformer, is_student=True):
         num_training_steps=args.max_train_steps * args.gradient_accumulation_steps,
     )
     return optimizer, lr_scheduler, params_to_optimize
-
-
 # ----------------------------------------------------------------------------------------------------------------------
 
 
@@ -766,41 +669,35 @@ def load_if_exist(args, accelerator, dataloader_size):
         initial_global_step = 0
 
     return initial_global_step
-
-
 # ----------------------------------------------------------------------------------------------------------------------
 
 
 # ----------------------------------------------------------------------------------------------------------------------
 def prepare_3rd_party(args, accelerator, dataloader_size):
-    # Scheduler and math around the number of training steps.
+    ## Scheduler and math around the number of training steps.
     overrode_max_train_steps = False
     num_update_steps_per_epoch = math.ceil(dataloader_size / args.gradient_accumulation_steps)
     if args.max_train_steps is None:
         args.max_train_steps = args.num_train_epochs * num_update_steps_per_epoch
         overrode_max_train_steps = True
 
-    # We need to recalculate our total training steps as the size of the training dataloader may have changed.
+    ## We need to recalculate our total training steps as the size of the training dataloader may have changed.
     num_update_steps_per_epoch = math.ceil(dataloader_size / args.gradient_accumulation_steps)
     if overrode_max_train_steps:
         args.max_train_steps = args.num_train_epochs * num_update_steps_per_epoch
-    # Afterwards we recalculate our number of training epochs
+
+    ## Afterwards we recalculate our number of training epochs
     args.num_train_epochs = math.ceil(args.max_train_steps / num_update_steps_per_epoch)
 
-    # We need to initialize the trackers we use, and also store our configuration.
-    # The trackers initializes automatically on the main process.
+    ## We need to initialize the trackers we use, and also store our configuration.
+    ## The trackers initializes automatically on the main process.
     if accelerator.is_main_process:
         tracker_config = vars(deepcopy(args))
-        # Tracker config doesn't support lists
-        tracker_config.pop("sizes")
-        tracker_config.pop("size_switch_steps")
-        tracker_config.pop("scales")
+        ## Tracker config doesn't support lists
         tracker_config.pop("cls_blocks")
         tracker_config.pop("pdm_blocks")
         tracker_config.pop("boundaries")
-        accelerator.init_trackers("scalewise", config=tracker_config)
-
-
+        accelerator.init_trackers("refiner", config=tracker_config)
 # ----------------------------------------------------------------------------------------------------------------------
 
 
@@ -820,8 +717,6 @@ def saving(transformer, args, accelerator, global_step, logs):
     # save_path = os.path.join(args.output_dir, f"checkpoint-{global_step}")
     # accelerator.save_state(save_path)
     # logger.info(f"Saved state to {save_path}")
-
-
 # ----------------------------------------------------------------------------------------------------------------------
 
 

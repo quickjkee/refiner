@@ -1,29 +1,13 @@
-import yaml
 import csv
 import os
+
 import numpy as np
 import torch
 import torch.distributed as dist
-
 from PIL import Image
 from torch.utils.data import Dataset
 from torch.utils.data.distributed import DistributedSampler
 from torchvision import transforms
-from omegaconf import OmegaConf
-try:
-    from yt_tools.utils import instantiate_from_config
-except ModuleNotFoundError:
-    pass
-
-
-def create_dataloader(args, skip_rows=0):
-    if args.dataloader_config_path is not None:
-        with open(args.dataloader_config_path) as f:
-            dataloader_config = OmegaConf.create(yaml.load(f, Loader=yaml.SafeLoader))
-        dataloader_config["params"]["batch_size"] = args.train_batch_size
-        return instantiate_from_config(dataloader_config, skip_rows=skip_rows)
-    elif args.dataloader_config_path is not None:
-        return get_loader(args, batch_size=args.train_batch_size, is_train=True)
 
 
 def get_loader(args, batch_size=50, is_train=False, max_cnt=None):
