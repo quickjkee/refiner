@@ -2,7 +2,9 @@ ACCELERATE_CONFIG="configs/default_config.yaml"
 PORT=$(( ((RANDOM<<15)|RANDOM) % 27001 + 2000 ))
 echo $PORT
 
-MODEL_NAME="stabilityai/stable-diffusion-3.5-large"
+# "yandex/stable-diffusion-3.5-large-alchemist"
+# "stabilityai/stable-diffusion-3.5-large"
+MODEL_NAME="yandex/stable-diffusion-3.5-large-alchemist"
 DATASET_PATH="configs/data/mj_sd3.5_cfg4.5_40_steps_preprocessed.yaml"
 
 

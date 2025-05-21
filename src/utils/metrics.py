@@ -89,7 +89,10 @@ def calculate_scores(
     
     if ref_stats_path is not None:
         logger.info("Evaluating FID score...")
-        fid_score = calculate_fid(images, ref_stats_path, inception_path=args.inception_path)
+        if len(images) < 5000:
+            fid_score = torch.zeros(1)
+        else:
+            fid_score = calculate_fid(images, ref_stats_path, inception_path=args.inception_path)
 
     div_score = torch.zeros(1)
     if len(additional_images) > 0:

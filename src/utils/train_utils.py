@@ -151,7 +151,7 @@ def distributed_sampling(
     accelerator,
     logger,
     seed=None,
-    max_eval_samples=None
+    max_eval_samples=None,
     offloadable_encoders=None,
     cfg_scale=0.0,
     pipeline_teacher=None,

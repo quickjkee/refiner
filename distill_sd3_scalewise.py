@@ -29,10 +29,9 @@ import transformers
 import types
 import diffusers
 
-from safetensors import safe_open
 from accelerate import Accelerator
 from accelerate.logging import get_logger
-from accelerate.utils import DistributedDataParallelKwargs, DistributedType, ProjectConfiguration, set_seed
+from accelerate.utils import DistributedDataParallelKwargs, ProjectConfiguration, set_seed
 from peft import LoraConfig, set_peft_model_state_dict, get_peft_model
 from peft.utils import get_peft_model_state_dict
 from tqdm.auto import tqdm
@@ -55,7 +54,7 @@ from src.utils.train_utils import log_validation, tokenize_captions, \
     encode_prompt, unwrap_model, tokenize_prompt, distributed_sampling
 from src.utils.flow_matching_sampler import FlowMatchingSolver
 from src.pipelines.stable_diffusion_3 import ScaleWiseStableDiffusion3Pipeline
-from src.models.transformer_with_gan import forward_with_classify, TransformerCls, TransformerUp
+from src.models.transformer_with_gan import forward_with_classify, TransformerCls
 from src.utils.distillation_losses import dmd_loss, fake_diffusion_loss, diffusion_loss
 from src.utils.metrics import calculate_scores
 
