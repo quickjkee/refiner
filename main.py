@@ -132,6 +132,10 @@ def parse_args(input_args=None):
         default='distill_sd3_scalewise',
     )
     parser.add_argument(
+        "--calc_diversity",
+        action="store_true",
+    )
+    parser.add_argument(
         "--output_dir",
         type=str,
         default="sd-model-finetuned-lora",

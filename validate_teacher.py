@@ -22,15 +22,30 @@ def validate_teacher(args):
     images, prompts = distributed_sampling(None, args, f'prompts/mjhq.csv',
                                            prepare_prompt_embed_from_caption, None, None,
                                            accelerator, logger, 0,
+                                           max_eval_samples=args.max_eval_samples,
+                                           seed=args.seed,
                                            pipeline_teacher=pipeline_teacher,
                                            cfg_scale=args.cfg_teacher)
+    additional_images = []
+    if args.calc_diversity:
+        for seed in [0, 1, 2, 3]:
+                images, _ = distributed_sampling(None, args, f'prompts/mjhq.csv',
+                                           prepare_prompt_embed_from_caption, None, None,
+                                           accelerator, logger, 0,
+                                           max_eval_samples=args.max_eval_samples,
+                                           seed=seed,
+                                           pipeline_teacher=pipeline_teacher,
+                                           cfg_scale=args.cfg_teacher)
+                additional_images.append(images)
+
 
     if accelerator.is_main_process:
-        image_reward, pick_score, clip_score, hpsv_reward, fid_score = calculate_scores(
+        image_reward, pick_score, clip_score, hpsv_reward, fid_score, div_score = calculate_scores(
             args,
             images,
             prompts,
             ref_stats_path=args.mjhq_ref_stats_path,
+            additional_images=additional_images
         )
         logs = {
             f"fid": fid_score.item(),
@@ -38,5 +53,6 @@ def validate_teacher(args):
             f"clip_score": clip_score.item(),
             f"image_reward": image_reward.item(),
             f"hpsv_reward": hpsv_reward.item(),
+            f'diversity_score': div_score.item(),
         }
         print(logs)

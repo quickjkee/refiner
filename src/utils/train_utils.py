@@ -150,6 +150,8 @@ def distributed_sampling(
     noise_scheduler,
     accelerator,
     logger,
+    seed=None,
+    max_eval_samples=None
     offloadable_encoders=None,
     cfg_scale=0.0,
     pipeline_teacher=None,
@@ -159,10 +161,12 @@ def distributed_sampling(
     weight_dtype = torch.float16
     offloadable_encoders = offloadable_encoders or []
     
-    generator = torch.Generator(device=accelerator.device).manual_seed(args.seed) if args.seed else None
+    seed = seed if seed else args.seed
+    generator = torch.Generator(device=accelerator.device).manual_seed(seed)
+    max_eval_samples = max_eval_samples if max_eval_samples else args.max_eval_samples
     # Prepare validation prompts
     rank_batches, rank_batches_index, all_prompts = prepare_val_prompts(
-        val_prompt_path, bs=args.eval_batch_size, max_cnt=args.max_eval_samples
+        val_prompt_path, bs=args.eval_batch_size, max_cnt=max_eval_samples
     )
 
     local_images = []

@@ -49,6 +49,7 @@ def calculate_scores(
     images,
     prompts,
     ref_stats_path=None,
+    additional_images=[],
     device='cuda'
 ):
     processor = AutoProcessor.from_pretrained(args.clip_model_name_or_path)
@@ -90,10 +91,18 @@ def calculate_scores(
         logger.info("Evaluating FID score...")
         fid_score = calculate_fid(images, ref_stats_path, inception_path=args.inception_path)
 
-    return image_reward, pick_score, clip_score, hpsv_reward, fid_score
+    div_score = torch.zeros(1)
+    if len(additional_images) > 0:
+        logger.info("Evaluating diversity score...")
+        additional_images = [processor(images=imgs, return_tensors="pt",)['pixel_values'].to('cpu') for imgs in additional_images]
+        additional_images.append(image_inputs.to('cpu'))
+        div_score = calc_div_scores(clip_model, additional_images).mean()
+
+    return image_reward, pick_score, clip_score, hpsv_reward, fid_score, div_score
 # ----------------------------------------------------------------------------------------------------------------------
 
 
+# ----------------------------------------------------------------------------------------------------------------------
 @torch.inference_mode()
 def calculate_image_reward_score(
     images, prompts, device='cuda',
@@ -130,4 +139,23 @@ def calculate_image_reward_score(
         scores.extend(rewards[:, 0].tolist())
     
     return np.mean(scores)
+# ----------------------------------------------------------------------------------------------------------------------
+
+
+# ----------------------------------------------------------------------------------------------------------------------
+@torch.no_grad()
+def calc_div_scores(model, image_inputs):
+    scores = torch.zeros(len(image_inputs[0]))
+    for i in range(0, len(scores)):
+        image_batch = torch.stack([img[i] for img in image_inputs]).to('cuda').to(model.dtype)
+        # embed
+        with torch.cuda.amp.autocast():
+            image_embs = model.get_image_features(image_batch)
+        image_embs = image_embs / torch.norm(image_embs, dim=-1, keepdim=True)
+
+        # score
+        score = image_embs @ image_embs.T
+        torch.diagonal(score, 0).zero_()
+        scores[i] = score.mean()
+    return scores.cpu()
 # ----------------------------------------------------------------------------------------------------------------------
