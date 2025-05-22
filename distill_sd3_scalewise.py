@@ -274,7 +274,6 @@ def train(args):
                     }
                     print(eval_set_name, logs)
                     accelerator.log(logs, step=global_step)
-                    copy_logs_to_logs_path(logging_dir)
 
                 torch.cuda.empty_cache()
                 del pipeline_teacher
@@ -289,9 +288,8 @@ def train(args):
 
         ### Log validation images
         ### ----------------------------------------------------
-        if accelerator.is_main_process:
-            if global_step % args.validation_steps == 0:
-                pipeline_teacher = StableDiffusion3Pipeline.from_pretrained("stabilityai/stable-diffusion-3.5-large",
+        if global_step % args.validation_steps == 0:
+            pipeline_teacher = StableDiffusion3Pipeline.from_pretrained("stabilityai/stable-diffusion-3.5-large",
                                                                             transformer=unwrap_model(transformer_teacher,
                                                                                                      accelerator),
                                                                             vae=vae,
@@ -308,7 +306,7 @@ def train(args):
                                                                             variant=args.variant,
                                                                             torch_dtype=torch.bfloat16)
 
-                log_validation(
+            log_validation(
                     unwrap_model(transformer, accelerator),
                     args,
                     prepare_prompt_embed_from_caption,
@@ -321,8 +319,8 @@ def train(args):
                     pipeline_teacher=pipeline_teacher,
                 )
 
-                del pipeline_teacher
-                torch.cuda.empty_cache()
+            del pipeline_teacher
+            torch.cuda.empty_cache()
 
         accelerator.wait_for_everyone()
         ### ----------------------------------------------------
@@ -696,7 +694,6 @@ def prepare_3rd_party(args, accelerator, dataloader_size):
         ## Tracker config doesn't support lists
         tracker_config.pop("cls_blocks")
         tracker_config.pop("pdm_blocks")
-        tracker_config.pop("boundaries")
         accelerator.init_trackers("refiner", config=tracker_config)
 # ----------------------------------------------------------------------------------------------------------------------
 

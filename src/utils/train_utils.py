@@ -26,18 +26,12 @@ if is_wandb_available():
 
 
 VALIDATION_PROMPTS = [
-    "portrait photo of a girl, photograph, highly detailed face, depth of field, moody light, golden hour, style by Dan Winters, Russell James, Steve McCurry, centered, extremely detailed, Nikon D850, award winning photography",
     "Self-portrait oil painting, a beautiful cyborg with golden hair, 8k",
     'A girl with pale blue hair and a cami tank top',
     'cute girl, Kyoto animation, 4k, high resolution',
     "Four cows in a pen on a sunny day",
     "Three dogs sleeping together on an unmade bed",
-    "a deer with bird feathers, highly detailed, full body",
-    "A sky blue colored hippopotamus",
-    "a masterpiece of gastronomy, a small plate, crab phalanges, cream sauce",
     "The interior of a mad scientists laboratory, Cluttered with science experiments, tools and strange machines, Eerie purple light, Close up, by Miyazaki",
-    "a barred owl peeking out from dense tree branches",
-    "a close-up of a blue dragonfly on a daffodil",
     "A green train is coming down the tracks",
     "A photograph of the inside of a subway train. There are frogs sitting on the seats. One of them is reading a newspaper. The window shows the river in the background.",
     "a family of four posing at the Grand Canyon",
@@ -46,7 +40,15 @@ VALIDATION_PROMPTS = [
     "A tornado made of bees crashing into a skyscraper. painting in the style of Hokusai.",
     "A raccoon wearing formal clothes, wearing a tophat and holding a cane. The raccoon is holding a garbage bag. Oil painting in the style of abstract cubism.",
     "A castle made of cardboard.",
-    "A cartoon tiger face",
+    "a cat sitting on a stairway railing",
+    "a cat drinking a pint of beer",
+    "a bat landing on a baseball bat",
+    "a black dog sitting between a bush and a pair of green pants standing up with nobody inside them",
+    "a basketball game between a team of four cats and a team of three dogs",
+    "a cat jumping in the air",
+    "a book with the words ’Don’t Panic!’ written on it",
+    "A bowl of soup that looks like a monster made out of plasticine",
+    "two motorcycles facing each other"
 ]
 
 
@@ -63,6 +65,7 @@ def log_validation(
     offloadable_encoders=None,
     cfg_scale=0.0,
     pipeline_teacher=None,
+    step=0,
 ):
     offloadable_encoders = offloadable_encoders or []
     
@@ -72,8 +75,7 @@ def log_validation(
     # run inference
     seed = seed if seed else args.seed
     generator = torch.Generator(device=accelerator.device).manual_seed(seed)
-    weight_dtype = pipeline.text_encoder.dtype
-    assert weight_dtype == torch.float16
+    weight_dtype = torch.float16
     
     # Load text encoders to device
     for encoder in offloadable_encoders:
@@ -81,13 +83,14 @@ def log_validation(
         
     image_logs = []
     images_teacher = None
-    for _, prompt in enumerate(validation_prompts):
+    for _, prompt in enumerate(tqdm.tqdm(validation_prompts, disable=(not accelerator.is_main_process))):
+        prompt = [prompt] * 5
 
         # Teacher + refining
         if transformer is not None:
             with pipeline_teacher.transformer.disable_adapter():
                 latents_teacher = pipeline_teacher(
-                    [prompt],
+                    prompt,
                     num_inference_steps=28,
                     guidance_scale=cfg_scale,
                     generator=generator,
@@ -95,7 +98,7 @@ def log_validation(
                 ).images
 
             prompt_embeds, pooled_prompt_embeds = prepare_prompt_embed_from_caption(
-                [prompt], pipeline_teacher.tokenizer, pipeline_teacher.tokenizer_2, pipeline_teacher.tokenizer_3,
+                prompt, pipeline_teacher.tokenizer, pipeline_teacher.tokenizer_2, pipeline_teacher.tokenizer_3,
                 pipeline_teacher.text_encoder, pipeline_teacher.text_encoder_2, pipeline_teacher.text_encoder_3,
             )
             timesteps = noise_scheduler.timesteps[args.refining_timestep_index].to(device=latents_teacher.device)
@@ -118,36 +121,34 @@ def log_validation(
         # Teacher only
         else:
             images = pipeline_teacher(
-                [prompt],
+                prompt,
                 num_inference_steps=28,
                 guidance_scale=cfg_scale,
                 generator=generator,
             ).images
 
-        image_logs.append({"validation_prompt": prompt, "images": images})
+        image_logs.append({"validation_prompt": prompt[0], "images": images})
         if images_teacher is not None:
-            image_logs.append({"validation_prompt": f'teacher_{prompt}', "images": images_teacher})
+            image_logs.append({"validation_prompt": f'teacher_{prompt[0]}', "images": images_teacher})
         
     # Offload text encoders back
     for encoder in offloadable_encoders:
         encoder.cpu()
     
     torch.cuda.empty_cache()
-        
-    for tracker in accelerator.trackers:
-        if tracker.name == "tensorboard":
-            for log in image_logs:
-                images = log["images"]
-                validation_prompt = log["validation_prompt"]
-                formatted_images = []
-                for image in images:
-                    formatted_images.append(np.asarray(image.resize((512, 512))))
-
-                formatted_images = np.stack(formatted_images)
-                tracker.writer.add_images(validation_prompt, formatted_images, step, dataformats="NHWC")
-        else:
-            logger.warn(f"image logging not implemented for {tracker.name}")
-
+    if accelerator.is_main_process:
+        for tracker in accelerator.trackers:
+            if tracker.name == "tensorboard":
+                for log in image_logs:
+                    images = log["images"]
+                    validation_prompt = log["validation_prompt"]
+                    formatted_images = []
+                    for image in images:
+                        formatted_images.append(np.asarray(image.resize((512, 512))))
+                    formatted_images = np.stack(formatted_images)
+                    tracker.writer.add_images(validation_prompt, formatted_images, step, dataformats="NHWC")
+            else:
+                logger.warn(f"image logging not implemented for {tracker.name}")
     return images
 # ----------------------------------------------------------------------------------------------------------------------
 
