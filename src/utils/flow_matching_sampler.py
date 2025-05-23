@@ -12,59 +12,8 @@ class FlowMatchingSolver:
     def __init__(
         self,
         noise_scheduler,
-        num_boundaries=1,
-        scales=None,
-        boundaries=None
     ):
-        """
-        Set up boundaries indexes.
-        For example, if num_boundaries = 3
-        boundary_start_idx = [ 0,  9, 18], boundary_end_idx = [9, 18, 28]
-
-        :param noise_scheduler: scheduler from the diffusers
-        :param num_boundaries: (int)
-        """
-        if scales:
-            assert len(scales) == num_boundaries
-            self.min_scale = scales[0]
-            scales = torch.tensor(scales)
-            self.scales_pixels = scales * 8
-        self.scales = scales
-
-        self.num_boundaries = num_boundaries
-        if num_boundaries == 0:
-            boundary_idx = torch.tensor([0])
-            self.boundary_start_idx = boundary_idx
-        else:
-            if boundaries is None:
-                self.boundary_idx = torch.linspace(0,
-                                                   len(noise_scheduler.timesteps),
-                                                   num_boundaries + 1, dtype=int)
-            else:
-                self.boundary_idx = torch.tensor(boundaries, dtype=int)
-            self.boundary_start_idx = self.boundary_idx[:-1]
-            self.boundary_end_idx = self.boundary_idx[1:]
-
         self.noise_scheduler = noise_scheduler
-    ## ---------------------------------------------------------------------------
-
-
-    ## ---------------------------------------------------------------------------
-    def sample_end_boundary_idx(self, batch_of_start_idx):
-        """
-        Sample indexes of the end boundaries for batch of start indexes.
-        For example, if num_boundaries = 3 and batch_of_start_idx = [18,  0,  0,  9].
-        Then, batch_of_end_idx = [28,  9,  9, 18]
-
-        :param batch_of_start_idx: (tensor), [b_size]
-        :return: batch_of_end_idx (tensor), [b_size]
-        """
-
-        mask = (batch_of_start_idx[None, :] == self.boundary_end_idx[:, None]).long()
-        idx = torch.argmax(mask[[self.num_boundaries - 1] + list(range(0, self.num_boundaries - 1)), :], dim=0)
-        batch_of_end_idx = self.boundary_end_idx[idx]
-
-        return batch_of_end_idx
     ## ---------------------------------------------------------------------------
 
 

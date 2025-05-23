@@ -17,12 +17,12 @@ except ModuleNotFoundError:
 
 
 def create_dataloader(args, skip_rows=0):
-    if args.dataloader_config_path is not None:
-        with open(args.dataloader_config_path) as f:
+    if args.train_dataloader_config_path is not None:
+        with open(args.train_dataloader_config_path) as f:
             dataloader_config = OmegaConf.create(yaml.load(f, Loader=yaml.SafeLoader))
         dataloader_config["params"]["batch_size"] = args.train_batch_size
         return instantiate_from_config(dataloader_config, skip_rows=skip_rows)
-    elif args.dataloader_config_path is not None:
+    elif args.train_data_dir is not None:
         return get_loader(args, batch_size=args.train_batch_size, is_train=True)
 
 
@@ -49,13 +49,14 @@ def get_loader(args, batch_size=50, is_train=False, max_cnt=None):
     dataset_sampler = sampler_class(
         dataset=dataset,
         rank=dist.get_rank(),
+        seed=args.seed,
         shuffle=is_train,
         num_replicas=dist.get_world_size(),
     )
     data = iter(torch.utils.data.DataLoader(
         dataset=dataset, sampler=dataset_sampler, batch_size=batch_size
     ))
-    return data
+    return data, dataset
 
 
 class Dataset(Dataset):
@@ -103,7 +104,7 @@ class Dataset(Dataset):
             for i, row in enumerate(spamreader):
                 if i == 0:
                     continue
-                self.captions[row[1]] = row[2]
+                self.captions[row[0]] = row[1]
 
     def __len__(self):
         return len(self.samples)
@@ -122,6 +123,7 @@ class Dataset(Dataset):
             "image": sample,
             "text": self.captions[os.path.basename(sample_path)],
             "idxs": idx,
+            "sample_path": sample_path
         }
 
 

@@ -1,3 +1,5 @@
+export NCCL_DEBUG=WARN
+export FI_PROVIDER=tcp
 ACCELERATE_CONFIG="configs/default_config.yaml"
 PORT=$(( ((RANDOM<<15)|RANDOM) % 27001 + 2000 ))
 echo $PORT
@@ -5,35 +7,42 @@ echo $PORT
 # "yandex/stable-diffusion-3.5-large-alchemist"
 # "stabilityai/stable-diffusion-3.5-large"
 MODEL_NAME="stabilityai/stable-diffusion-3.5-large"
-DATASET_PATH="configs/data/mj_sd3.5_cfg4.5_40_steps_preprocessed.yaml"
-
+#DATASET_PATH="configs/data/mj_sd3.5_cfg4.5_40_steps_preprocessed.yaml"
+DATASET_PATH="/mnt/remotes/sensei-fs/users/nstarodubcev/projects/refining_dataset/general_refiner/dataset_alchemist"
+#42
 
 accelerate launch --num_processes=8 --multi_gpu --mixed_precision fp16 --main_process_port $PORT main.py \
     --pretrained_model_name_or_path=$MODEL_NAME \
-    --train_dataloader_config_path=$DATASET_PATH \
-    --current_task="validate_teacher" \
+    --train_data_dir=$DATASET_PATH \
+    --current_task="refiner_sd3" \
     --output_dir="results" \
     --seed=42 \
-    --train_batch_size=2 \
+    --train_batch_size=4 \
     --eval_batch_size=4 \
-    --learning_rate=2e-6 \
+    --learning_rate=6e-5 \
+    --learning_rate_cls=3e-4 \
     --lr_scheduler="constant_with_warmup" \
+    --lr_scheduler_cls="constant" \
     --lr_warmup_steps=300 \
+    --refining_timestep_index=25 \
+    --refining_scale=1.0 \
     --do_pdm_loss \
-    --num_discriminator_upds=3 \
+    --num_steps_fake_dmd=2 \
     --num_discriminator_layers=4 \
-    --cls_blocks=11 \
-    --pdm_blocks=22 \
+    --cls_blocks=20 \
+    --pdm_blocks=20 \
     --cfg_teacher=3.5 \
-    --cfg_fake=3.5 \
-    --rank=64 \
+    --cfg_fake=0.0 \
+    --gen_cls_loss_weight=1e-2 \
+    --guidance_cls_loss_weight=1e-2 \
+    --rank=128 \
     --apply_lora_to_attn_projections \
     --apply_lora_to_mlp_projections \
-    --validation_steps=20 \
-    --evaluation_steps=10 \
+    --validation_steps=50 \
+    --evaluation_steps=10000 \
     --max_train_steps=1000 \
     --checkpointing_steps=5000 \
-    --max_eval_samples=96 \
+    --max_eval_samples=5000 \
     --resume_from_checkpoint=latest \
     --gradient_checkpointing \
     --text_column="text" \

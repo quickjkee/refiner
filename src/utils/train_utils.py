@@ -101,7 +101,8 @@ def log_validation(
                 prompt, pipeline_teacher.tokenizer, pipeline_teacher.tokenizer_2, pipeline_teacher.tokenizer_3,
                 pipeline_teacher.text_encoder, pipeline_teacher.text_encoder_2, pipeline_teacher.text_encoder_3,
             )
-            timesteps = noise_scheduler.timesteps[args.refining_timestep_index].to(device=latents_teacher.device)
+            refining_timestep_index = torch.tensor([args.refining_timestep_index] * len(prompt_embeds)).long()
+            timesteps = noise_scheduler.timesteps[refining_timestep_index].to(device=latents_teacher.device)
             images = transformer(
                 latents_teacher,
                 prompt_embeds,
@@ -109,6 +110,7 @@ def log_validation(
                 timesteps,
                 return_dict=False,
             )[0].to(weight_dtype)
+            images = latents_teacher - args.refining_scale * images
 
             latent = (images / pipeline_teacher.vae.config.scaling_factor) + pipeline_teacher.vae.config.shift_factor
             images = pipeline_teacher.vae.decode(latent, return_dict=False)[0]
@@ -128,7 +130,7 @@ def log_validation(
             ).images
 
         image_logs.append({"validation_prompt": prompt[0], "images": images})
-        if images_teacher is not None:
+        if images_teacher is not None and not step > args.validation_steps:
             image_logs.append({"validation_prompt": f'teacher_{prompt[0]}', "images": images_teacher})
         
     # Offload text encoders back
@@ -207,7 +209,8 @@ def distributed_sampling(
                 list(mini_batch), pipeline_teacher.tokenizer, pipeline_teacher.tokenizer_2, pipeline_teacher.tokenizer_3,
                 pipeline_teacher.text_encoder, pipeline_teacher.text_encoder_2, pipeline_teacher.text_encoder_3,
             )
-            timesteps = noise_scheduler.timesteps[args.refining_timestep_index].to(device=latents_teacher.device)
+            refining_timestep_index = torch.tensor([args.refining_timestep_index] * len(prompt_embeds)).long()
+            timesteps = noise_scheduler.timesteps[refining_timestep_index].to(device=latents_teacher.device)
             images = transformer(
                 latents_teacher,
                 prompt_embeds,
@@ -215,6 +218,7 @@ def distributed_sampling(
                 timesteps,
                 return_dict=False,
             )[0].to(weight_dtype)
+            images = latents_teacher - args.refining_scale * images
 
             latent = (images / pipeline_teacher.vae.config.scaling_factor) + pipeline_teacher.vae.config.shift_factor
             images = pipeline_teacher.vae.decode(latent, return_dict=False)[0]

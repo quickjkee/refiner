@@ -62,6 +62,7 @@ def gan_loss_fn(cls_head, inner_features_fake, inner_features_true=None):
 def dmd_loss(
         transformer, transformer_fake, transformer_teacher,
         prompt_embeds, pooled_prompt_embeds,
+        uncond_prompt_embeds, uncond_pooled_prompt_embeds,
         model_input, timesteps,
         optimizer, lr_scheduler, params_to_optimize,
         weight_dtype, noise_scheduler,
@@ -80,8 +81,7 @@ def dmd_loss(
         timesteps,
         return_dict=False,
     )[0]
-    sigma_start = noise_scheduler.sigmas[args.refining_timestep_index].to(device=model_pred.device)[:, None, None, None]
-    fake_sample = model_input - sigma_start * model_pred
+    fake_sample = model_input - args.refining_scale * model_pred
 
     ## Apply noise to the boundary points for the fake,
     idx_noisy = torch.randint(0, len(noise_scheduler.timesteps), (len(fake_sample),))
@@ -193,7 +193,7 @@ def fake_diffusion_loss(
         model_input, timesteps, target,
         optimizer, lr_scheduler, params_to_optimize,
         weight_dtype, noise_scheduler,
-        accelerator, args
+        accelerator, args,
 ):
     ## STEP 1. Make the prediction with the student to create fake samples
     ## ---------------------------------------------------------------------------
@@ -209,8 +209,7 @@ def fake_diffusion_loss(
             timesteps,
             return_dict=False,
         )[0]
-    sigma_start = noise_scheduler.sigmas[args.refining_timestep_index].to(device=model_pred.device)[:, None, None, None]
-    fake_sample = model_input - sigma_start * model_pred
+    fake_sample = model_input - args.refining_scale * model_pred
 
     ## Apply noise to the boundary points for the fake sample
     idx_noisy = torch.randint(0, len(noise_scheduler.timesteps), (len(fake_sample),))
@@ -290,9 +289,7 @@ def pdm_loss(
         timesteps,
         return_dict=False,
     )[0]
-
-    sigma_start = noise_scheduler.sigmas[args.refining_timestep_index].to(device=model_pred.device)[:, None, None, None]
-    fake_sample = model_input - sigma_start * model_pred
+    fake_sample = model_input - args.refining_scale * model_pred
     true_sample = target
     ## ---------------------------------------------------------------------------
 

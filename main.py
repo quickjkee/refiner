@@ -1,7 +1,7 @@
 import argparse
 import os
 
-from distill_sd3_scalewise import train
+from refiner_sd3 import train
 from validate_teacher import validate_teacher
 
 # Parse arguments
@@ -221,6 +221,7 @@ def parse_args(input_args=None):
     ## -----------------------------------------------------------------------------------------------
     parser.add_argument("--seed", type=int, default=0, help="A seed for reproducible training.")
     parser.add_argument("--refining_timestep_index", type=int, default=26)
+    parser.add_argument("--refining_scale", type=float, default=1.0)
     parser.add_argument(
         "--train_batch_size", type=int, default=16, help="Batch size (per device) for the training dataloader."
     )
@@ -371,6 +372,10 @@ def parse_args(input_args=None):
         action="store_true",
     )
     parser.add_argument(
+        "--do_dmd",
+        action="store_true",
+    )
+    parser.add_argument(
         "--cls_blocks",
         type=str,
         default=None,
@@ -381,7 +386,7 @@ def parse_args(input_args=None):
         default=None,
     )
     parser.add_argument(
-        "--n_steps_fake_dmd",
+        "--num_steps_fake_dmd",
         type=int,
         default=5,
     )
@@ -415,10 +420,10 @@ def parse_args(input_args=None):
 if __name__ == "__main__":
     args = parse_args()
 
-    available_tasks = ['distill_sd3_scalewise', 'validate_teacher']
+    available_tasks = ['refiner_sd3', 'validate_teacher']
     assert args.current_task in available_tasks
 
-    if args.current_task == 'distill_sd3_scalewise':
+    if args.current_task == 'refiner_sd3':
         train(args)
     elif args.current_task == 'validate_teacher':
         validate_teacher(args)

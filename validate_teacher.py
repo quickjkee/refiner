@@ -5,7 +5,7 @@ from diffusers import StableDiffusion3Pipeline
 from copy import deepcopy
 
 from src.utils.train_utils import distributed_sampling, log_validation
-from distill_sd3_scalewise import prepare_accelertor, prepare_prompt_embed_from_caption
+from refiner_sd3 import prepare_accelertor, prepare_prompt_embed_from_caption
 from src.utils.metrics import calculate_scores
 
 logger = get_logger(__name__)
