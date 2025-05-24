@@ -56,7 +56,7 @@ from src.utils.train_utils import log_validation, tokenize_captions, \
 from src.utils.flow_matching_sampler import FlowMatchingSolver
 from src.pipelines.stable_diffusion_3 import ScaleWiseStableDiffusion3Pipeline
 from src.models.transformer_with_gan import forward_with_classify, TransformerCls
-from src.utils.distillation_losses import dmd_loss, fake_diffusion_loss, pdm_loss
+from src.utils.distillation_losses import dmd_loss, fake_diff_and_class_loss, pdm_loss
 from src.utils.metrics import calculate_scores
 
 logger = get_logger(__name__)
@@ -166,7 +166,7 @@ def train(args):
 
         ### DMD loss
         ### ----------------------------------------------------
-        if args.do_dmd:
+        if args.do_dmd or args.do_gan:
             for _ in range(args.num_steps_fake_dmd):
                 (target, batch,
                 prompt_embeds, pooled_prompt_embeds) = sample_batch(args,
@@ -185,7 +185,7 @@ def train(args):
                 refining_timestep_index = torch.tensor([args.refining_timestep_index] * args.train_batch_size).long()
                 timesteps = noise_scheduler.timesteps[refining_timestep_index].to(device=target.device)
 
-                avg_dmd_fake_loss = fake_diffusion_loss(
+                avg_dmd_fake_loss = fake_diff_and_class_loss(
                     transformer, transformer_fake,
                     prompt_embeds, pooled_prompt_embeds,
                     model_input, timesteps, target,
@@ -527,9 +527,9 @@ def prepare_models(args, accelerator):
     )
 
     transformer_fake = copy.deepcopy(transformer)
+    transformer_fake = get_peft_model(transformer_fake, transformer_lora_config) if args.do_dmd else transformer_fake
     transformer = get_peft_model(transformer, transformer_lora_config)
     transformer_teacher = transformer
-    transformer_fake = get_peft_model(transformer_fake, transformer_lora_config)
 
     # create custom saving & loading hooks so that `accelerator.save_state(...)` serializes in a nice format
     def save_model_hook(models, weights, output_dir):

@@ -41,13 +41,13 @@ def sample_from_student(transformer, solver, noise_scheduler, idx_end,
 def gan_loss_fn(cls_head, inner_features_fake, inner_features_true=None):
     logits_fake = 0
     for x in inner_features_fake:
-        logits_fake += cls_head(x.float().mean(dim=1))
+        logits_fake += cls_head(x.float())
     logits_fake /= len(inner_features_fake)
 
     if inner_features_true is not None:
         logits_true = 0
         for x in inner_features_true:
-            logits_true += cls_head(x.float().mean(dim=1))
+            logits_true += cls_head(x.float())
         logits_true /= len(inner_features_true)
 
         classification_loss = F.softplus(logits_fake).mean() + F.softplus(-logits_true).mean()
@@ -94,52 +94,55 @@ def dmd_loss(
 
     ## STEP 2. Calculate DMD loss
     ## ---------------------------------------------------------------------------
-    with torch.no_grad(), torch.autocast("cuda", dtype=weight_dtype), transformer_teacher.disable_adapter():
-        real_pred = transformer_teacher(
-            noisy_fake_sample,
-            prompt_embeds,
-            pooled_prompt_embeds,
-            timesteps_noisy,
-            return_dict=False,
-        )[0]
-        
-        if args.cfg_teacher > 1.0:
-            real_pred_uncond = transformer_teacher(
+    if args.do_dmd:
+        with torch.no_grad(), torch.autocast("cuda", dtype=weight_dtype), transformer_teacher.disable_adapter():
+            real_pred = transformer_teacher(
                 noisy_fake_sample,
-                uncond_prompt_embeds,
-                uncond_pooled_prompt_embeds,
+                prompt_embeds,
+                pooled_prompt_embeds,
                 timesteps_noisy,
                 return_dict=False,
             )[0]
-            real_pred = real_pred_uncond + args.cfg_teacher * (real_pred - real_pred_uncond)
-        real_pred_x0 = noisy_fake_sample - sigma_noisy * real_pred
 
-        fake_pred = transformer_fake(
-            noisy_fake_sample,
-            prompt_embeds,
-            pooled_prompt_embeds,
-            timesteps_noisy,
-            return_features=False,
-            return_dict=False
-        )[0]
+            if args.cfg_teacher > 1.0:
+                real_pred_uncond = transformer_teacher(
+                    noisy_fake_sample,
+                    uncond_prompt_embeds,
+                    uncond_pooled_prompt_embeds,
+                    timesteps_noisy,
+                    return_dict=False,
+                )[0]
+                real_pred = real_pred_uncond + args.cfg_teacher * (real_pred - real_pred_uncond)
+            real_pred_x0 = noisy_fake_sample - sigma_noisy * real_pred
 
-        if args.cfg_fake > 1.0:
-            fake_pred_uncond = transformer_fake(
+            fake_pred = transformer_fake(
                 noisy_fake_sample,
-                uncond_prompt_embeds,
-                uncond_pooled_prompt_embeds,
+                prompt_embeds,
+                pooled_prompt_embeds,
                 timesteps_noisy,
                 return_features=False,
-                return_dict=False,
+                return_dict=False
             )[0]
-            fake_pred = fake_pred_uncond + args.cfg_fake * (fake_pred - fake_pred_uncond)
-        fake_pred_x0 = noisy_fake_sample - sigma_noisy * fake_pred
 
-        weight_factor = abs(fake_sample.to(torch.float32) - real_pred_x0.to(torch.float32)) \
-            .mean(dim=[1, 2, 3], keepdim=True).clip(min=0.00001)
+            if args.cfg_fake > 1.0:
+                fake_pred_uncond = transformer_fake(
+                    noisy_fake_sample,
+                    uncond_prompt_embeds,
+                    uncond_pooled_prompt_embeds,
+                    timesteps_noisy,
+                    return_features=False,
+                    return_dict=False,
+                )[0]
+                fake_pred = fake_pred_uncond + args.cfg_fake * (fake_pred - fake_pred_uncond)
+            fake_pred_x0 = noisy_fake_sample - sigma_noisy * fake_pred
 
-    loss = (fake_pred_x0 - real_pred_x0) * noisy_fake_sample / weight_factor
-    loss = torch.mean(loss)
+            weight_factor = abs(fake_sample.to(torch.float32) - real_pred_x0.to(torch.float32)) \
+                .mean(dim=[1, 2, 3], keepdim=True).clip(min=0.00001)
+
+        loss = (fake_pred_x0 - real_pred_x0) * noisy_fake_sample / weight_factor
+        loss = torch.mean(loss)
+    else:
+        loss = torch.zeros(1)
     ## ---------------------------------------------------------------------------
 
     ## STEP 3. Calculate GAN loss
@@ -187,7 +190,7 @@ def dmd_loss(
 
 
 # ----------------------------------------------------------------------------------------------------------------------
-def fake_diffusion_loss(
+def fake_diff_and_class_loss(
         transformer, transformer_fake,
         prompt_embeds, pooled_prompt_embeds,
         model_input, timesteps, target,
@@ -222,15 +225,25 @@ def fake_diffusion_loss(
 
     ## STEP 2. Predict with fake net and calc diffusion loss
     ## ---------------------------------------------------------------------------
-    fake_pred, inner_features_fake = transformer_fake(noisy_fake_sample,
-                                                      prompt_embeds,
-                                                      pooled_prompt_embeds,
-                                                      timesteps_noisy,
-                                                      classify_index_block=args.cls_blocks,
-                                                      return_only_features=False,
-                                                      return_dict=False)
-    fake_pred_x0 = noisy_fake_sample - sigma_noisy * fake_pred[0]
-    loss = F.mse_loss(fake_pred_x0.float(), fake_sample.float(), reduction="mean")
+    if args.do_dmd:
+        fake_pred, inner_features_fake = transformer_fake(noisy_fake_sample,
+                                                          prompt_embeds,
+                                                          pooled_prompt_embeds,
+                                                          timesteps_noisy,
+                                                          classify_index_block=args.cls_blocks,
+                                                          return_only_features=False,
+                                                          return_dict=False)
+        fake_pred_x0 = noisy_fake_sample - sigma_noisy * fake_pred[0]
+        loss = F.mse_loss(fake_pred_x0.float(), fake_sample.float(), reduction="mean")
+    else:
+        inner_features_fake = transformer_fake(noisy_fake_sample,
+                                               prompt_embeds,
+                                               pooled_prompt_embeds,
+                                               timesteps_noisy,
+                                               classify_index_block=args.cls_blocks,
+                                               return_only_features=True,
+                                               return_dict=False)
+        loss = torch.zeros(1)
     ## ---------------------------------------------------------------------------
 
     ## STEP 3. Calculate real features and gan loss

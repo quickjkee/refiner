@@ -376,6 +376,10 @@ def parse_args(input_args=None):
         action="store_true",
     )
     parser.add_argument(
+        "--do_gan",
+        action="store_true",
+    )
+    parser.add_argument(
         "--cls_blocks",
         type=str,
         default=None,

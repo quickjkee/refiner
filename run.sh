@@ -26,7 +26,7 @@ accelerate launch --num_processes=8 --multi_gpu --mixed_precision fp16 --main_pr
     --lr_warmup_steps=300 \
     --refining_timestep_index=25 \
     --refining_scale=1.0 \
-    --do_pdm_loss \
+    --do_gan \
     --num_steps_fake_dmd=2 \
     --num_discriminator_layers=4 \
     --cls_blocks=20 \

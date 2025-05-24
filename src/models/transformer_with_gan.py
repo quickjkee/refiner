@@ -43,7 +43,7 @@ class TransformerCls(nn.Module):
             self.list_of_layers.append(FeedForward(dim.item(), dimensions[j+1].item()))
         self.cls_pred_branch = nn.Sequential(*self.list_of_layers)
 
-        #self.teacher_transformer.requires_grad_(False)
+        self.teacher_transformer.requires_grad_(False)
         self.cls_pred_branch.requires_grad_(True)
         num_cls_params = sum(p.numel() for p in self.cls_pred_branch.parameters())
         logger.info(f'Classification head number of trainable params: {num_cls_params}')
